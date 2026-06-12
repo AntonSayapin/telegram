@@ -8,10 +8,11 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"maunium.net/go/mautrix/bridgev2/networkid"
+
 	"go.mau.fi/mautrix-telegram/pkg/connector/ids"
 	"go.mau.fi/mautrix-telegram/pkg/connector/store"
 	"go.mau.fi/mautrix-telegram/pkg/gotd/tg"
-	"maunium.net/go/mautrix/bridgev2/networkid"
 )
 
 func (tc *TelegramClient) allowPeer(ctx context.Context, peer tg.PeerClass) bool {

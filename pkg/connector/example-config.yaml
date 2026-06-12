@@ -76,7 +76,7 @@ sync:
     login_sync_limit: 15
     # Whether or not to sync and create portals for direct chats at startup.
     direct_chats: true
-    
+
 filter:
   users:
     enabled: true
