@@ -28,6 +28,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"maunium.net/go/mautrix/bridgev2"
+	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 	"maunium.net/go/mautrix/mediaproxy"
@@ -306,7 +307,9 @@ func (t *Transferer) WithPeerPhoto(peer tg.InputPeerClass, photoID int64) *Ready
 // If there is a sticker config on the [Transferer], this function converts
 // animated stickers to the target format specified by the specified
 // [AnimatedStickerConfig].
-func (t *ReadyTransferer) Transfer(ctx context.Context, db *store.Container, intent bridgev2.MatrixAPI) (mxc id.ContentURIString, encryptedFileInfo *event.EncryptedFileInfo, outFileInfo *event.FileInfo, err error) {
+func (t *ReadyTransferer) Transfer(ctx context.Context, db *store.Container, intent bridgev2.MatrixAPI) (
+	mxc id.ContentURIString, encryptedFileInfo *event.EncryptedFileInfo, outFileInfo *event.FileInfo, err error,
+) {
 	locationID := getLocationID(t.loc)
 	log := zerolog.Ctx(ctx).With().
 		Str("component", "media_transfer").
@@ -388,7 +391,7 @@ func (t *ReadyTransferer) Transfer(ctx context.Context, db *store.Container, int
 		}, err
 	})
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("failed to upload media to Matrix: %w", err)
+		return "", nil, &t.inner.fileInfo, fmt.Errorf("failed to upload media to Matrix: %w", err)
 	}
 	if thumbnailData != nil {
 		thumbnailMXC, thumbnailFileInfo, err := intent.UploadMedia(ctx, t.inner.roomID, thumbnailData, t.inner.filename, thumbnailMIMEType)
@@ -523,13 +526,23 @@ func (t *ReadyTransferer) DownloadBytes(ctx context.Context) ([]byte, error) {
 }
 
 func (t *ReadyTransferer) StickerDirectDownloadURL(ctx context.Context, br *bridgev2.Bridge, set tg.StickerSet, loggedInUserID int64) (id.ContentURIString, *event.FileInfo, error) {
-	mediaID, err := ids.DirectMediaInfo{
-		PeerType:  ids.FakePeerTypeSticker,
-		PeerID:    set.ID,
-		UserID:    loggedInUserID,
-		MessageID: set.AccessHash, // sticker pack direct media abuses the user ID field for access hashes
-		ID:        t.loc.(*tg.InputDocumentFileLocation).ID,
-	}.AsMediaID()
+	var mediaID networkid.MediaID
+	var err error
+	if set.Emojis {
+		mediaID, err = ids.DirectMediaInfo{
+			PeerType: ids.FakePeerTypeEmoji,
+			UserID:   loggedInUserID,
+			ID:       t.loc.(*tg.InputDocumentFileLocation).ID,
+		}.AsMediaID()
+	} else {
+		mediaID, err = ids.DirectMediaInfo{
+			PeerType:  ids.FakePeerTypeSticker,
+			PeerID:    set.ID,
+			UserID:    loggedInUserID,
+			MessageID: set.AccessHash, // sticker pack direct media abuses the user ID field for access hashes
+			ID:        t.loc.(*tg.InputDocumentFileLocation).ID,
+		}.AsMediaID()
+	}
 	if err != nil {
 		return "", nil, err
 	}

@@ -57,7 +57,6 @@ ping:
 # Proxy settings
 proxy:
     # Allowed types: disabled, socks5, mtproxy
-    # Note: mtproxy support is probably broken currently
     type: disabled
     # Proxy IP address/domain name and port.
     address: "127.0.0.1:1080"
@@ -131,6 +130,9 @@ always_tombstone_on_supergroup_migration: false
 image_as_file_pixels: 16777216
 # Should view-once messages be disabled entirely?
 disable_view_once: false
+# Should video URL previews be bridged as m.video messages to Matrix?
+# By default, video URL previews will not be bridged.
+video_url_preview_as_file: false
 # Displayname template for Telegram users.
 # {{ .FullName }} - the full name of the Telegram user
 # {{ .FirstName }} - the first name of the Telegram user

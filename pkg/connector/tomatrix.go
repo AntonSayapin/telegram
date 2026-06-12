@@ -73,6 +73,8 @@ func mediaHashID(ctx context.Context, m tg.MessageMediaClass) []byte {
 		} else {
 			zerolog.Ctx(ctx).Debug().Msg("Attempted to get hash for nil document")
 		}
+	case *tg.MessageMediaWebPage:
+		return nil
 	default:
 		zerolog.Ctx(ctx).Debug().Type("media_type", m).Msg("Attempted to get hash for unsupported media type ID")
 	}
@@ -92,6 +94,10 @@ func (tc *TelegramClient) mediaToMatrix(
 
 	switch media.TypeID() {
 	case tg.MessageMediaWebPageTypeID:
+		if tc.main.Config.VideoURLPreviewAsFile && unwrapWebPage(media) != nil {
+			converted, disappearingSetting := tc.convertMediaRequiringUpload(ctx, portal, intent, msg.ID, media, true)
+			return converted, disappearingSetting, mediaHashID(ctx, media)
+		}
 		// Already handled in the message handling
 		return nil, nil, nil
 	case tg.MessageMediaUnsupportedTypeID:
@@ -177,7 +183,15 @@ func (tc *TelegramClient) convertToMatrix(
 
 	cm = &bridgev2.ConvertedMessage{}
 	hasher := sha256.New()
-	if len(msg.Message) > 0 {
+	if rm, ok := msg.GetRichMessage(); ok {
+		// TODO this probably won't write anything, add a better hasher
+		hasher.Write([]byte(msg.Message))
+		content := tc.parseRichText(ctx, &rm)
+		cm.Parts = []*bridgev2.ConvertedMessagePart{{
+			Type:    event.EventMessage,
+			Content: content,
+		}}
+	} else if len(msg.Message) > 0 || (msg.Media != nil && msg.Media.TypeID() == tg.MessageMediaWebPageTypeID) {
 		hasher.Write([]byte(msg.Message))
 
 		content := tc.parseBodyAndHTML(ctx, msg.Message, msg.Entities)
@@ -219,6 +233,18 @@ func (tc *TelegramClient) convertToMatrix(
 		if disappearingSetting != nil {
 			cm.Disappear = *disappearingSetting
 		}
+	}
+	if len(cm.Parts) == 0 {
+		cm.Parts = append(cm.Parts, &bridgev2.ConvertedMessagePart{
+			Type: event.EventMessage,
+			Content: &event.MessageEventContent{
+				MsgType: event.MsgNotice,
+				Body:    "Empty message",
+			},
+			Extra: map[string]any{
+				"fi.mau.telegram.unexpected_empty_message": true,
+			},
+		})
 	}
 	if perMessageProfile != nil {
 		cm.Parts[0].Content.BeeperPerMessageProfile = perMessageProfile
@@ -431,6 +457,17 @@ func (tc *TelegramClient) parseBodyAndHTML(ctx context.Context, message string, 
 	return telegramfmt.Parse(ctx, message, entities, tc.telegramFmtParams.WithCustomEmojis(customEmojis))
 }
 
+func (tc *TelegramClient) parseRichText(ctx context.Context, message *tg.RichMessage) *event.MessageEventContent {
+	customEmojiIDs := telegramfmt.FindRichTextCustomEmojis(message.Blocks)
+	customEmojis, err := tc.transferEmojisToMatrix(ctx, customEmojiIDs)
+	if err != nil {
+		zerolog.Ctx(ctx).Err(err).
+			Ints64("emoji_ids", customEmojiIDs).
+			Msg("Failed to transfer custom emojis to Matrix")
+	}
+	return telegramfmt.ParseRichText(ctx, message, tc.telegramFmtParams.WithCustomEmojis(customEmojis))
+}
+
 func (tc *TelegramClient) webpageToBeeperLinkPreview(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, msg *tg.Message, msgMedia tg.MessageMediaClass) (preview *event.BeeperLinkPreview, err error) {
 	webpage, ok := msgMedia.(*tg.MessageMediaWebPage).Webpage.(*tg.WebPage)
 	if !ok {
@@ -445,7 +482,7 @@ func (tc *TelegramClient) webpageToBeeperLinkPreview(ctx context.Context, portal
 		},
 	}
 
-	if photo, ok := webpage.Photo.(*tg.Photo); ok {
+	if photo, ok := webpage.Photo.(*tg.Photo); ok && (!tc.main.Config.VideoURLPreviewAsFile || unwrapWebPage(msgMedia) == nil) {
 		var fileInfo *event.FileInfo
 		transferer := media.NewTransferer(tc.client.API()).WithPhoto(photo)
 		if tc.main.useDirectMedia {
@@ -466,6 +503,26 @@ func (tc *TelegramClient) webpageToBeeperLinkPreview(ctx context.Context, portal
 	}
 
 	return preview, nil
+}
+
+func unwrapWebPage(msgMedia tg.MessageMediaClass) *tg.MessageMediaDocument {
+	mediaWebPage, ok := msgMedia.(*tg.MessageMediaWebPage)
+	if !ok || mediaWebPage.Webpage == nil {
+		return nil
+	}
+	webpage, ok := mediaWebPage.Webpage.(*tg.WebPage)
+	if !ok || webpage.Document == nil {
+		return nil
+	}
+	doc, ok := webpage.Document.AsNotEmpty()
+	if !ok {
+		return nil
+	}
+	return &tg.MessageMediaDocument{
+		Video:      true,
+		Document:   doc,
+		VideoCover: webpage.Photo,
+	}
 }
 
 func (tc *TelegramClient) convertMediaRequiringUpload(
@@ -491,6 +548,12 @@ func (tc *TelegramClient) convertMediaRequiringUpload(
 
 	transferer := media.NewTransferer(tc.client.API()).WithRoomID(portal.MXID)
 	var mediaTransferer *media.ReadyTransferer
+
+	isWebPage := false
+	if unwrapped := unwrapWebPage(msgMedia); unwrapped != nil {
+		msgMedia = unwrapped
+		isWebPage = true
+	}
 
 	if t, ok := msgMedia.(ttlable); ok {
 		if ttl, ok := t.GetTTLSeconds(); ok {
@@ -678,30 +741,34 @@ func (tc *TelegramClient) convertMediaRequiringUpload(
 			}
 		}
 
+		var thumbnailURL id.ContentURIString
+		var thumbnailFile *event.EncryptedFileInfo
+		var thumbnailInfo *event.FileInfo
+		var err error
+		var thumbnailTransferer *media.ReadyTransferer
 		if _, ok := document.GetThumbs(); ok && eventType != event.EventSticker {
-			var thumbnailURL id.ContentURIString
-			var thumbnailFile *event.EncryptedFileInfo
-			var thumbnailInfo *event.FileInfo
-			var err error
-
-			thumbnailTransferer := media.NewTransferer(tc.client.API()).
+			thumbnailTransferer = media.NewTransferer(tc.client.API()).
 				WithRoomID(portal.MXID).
 				WithDocument(document, true)
-			if tc.main.useDirectMedia {
-				thumbnailURL, thumbnailInfo, err = thumbnailTransferer.DirectDownloadURL(ctx, tc.telegramUserID, portal, msgID, true, document.ID)
-				if err != nil {
-					log.Err(err).Msg("Failed to create direct download URL for thumbnail")
-				}
+		} else if msgMedia.VideoCover != nil && isWebPage {
+			thumbnailTransferer = media.NewTransferer(tc.client.API()).
+				WithRoomID(portal.MXID).
+				WithPhoto(msgMedia.VideoCover.(*tg.Photo))
+		}
+		if tc.main.useDirectMedia && thumbnailTransferer != nil {
+			thumbnailURL, thumbnailInfo, err = thumbnailTransferer.DirectDownloadURL(ctx, tc.telegramUserID, portal, msgID, true, document.ID)
+			if err != nil {
+				log.Err(err).Msg("Failed to create direct download URL for thumbnail")
 			}
-			if thumbnailURL == "" {
-				thumbnailURL, thumbnailFile, thumbnailInfo, err = thumbnailTransferer.Transfer(ctx, tc.main.Store, intent)
-				if err != nil {
-					log.Err(err).Msg("Failed to transfer thumbnail")
-				}
+		}
+		if thumbnailURL == "" && thumbnailTransferer != nil {
+			thumbnailURL, thumbnailFile, thumbnailInfo, err = thumbnailTransferer.Transfer(ctx, tc.main.Store, intent)
+			if err != nil {
+				log.Err(err).Msg("Failed to transfer thumbnail")
 			}
-			if thumbnailURL != "" || thumbnailFile != nil {
-				transferer = transferer.WithThumbnail(thumbnailURL, thumbnailFile, thumbnailInfo)
-			}
+		}
+		if thumbnailURL != "" || thumbnailFile != nil {
+			transferer = transferer.WithThumbnail(thumbnailURL, thumbnailFile, thumbnailInfo)
 		}
 
 		mediaTransferer = transferer.
@@ -747,6 +814,9 @@ func (tc *TelegramClient) convertMediaRequiringUpload(
 					MsgType: event.MsgNotice,
 					Body:    "Failed to transfer media. Check Telegram app.",
 				},
+			}
+			if errors.Is(err, bridgev2.ErrMediaTooLarge) {
+				converted.Content.Body = fmt.Sprintf("Too large file %s (%.2f MiB)", content.GetFileName(), float64(content.Info.Size)/1024/1024)
 			}
 			return
 		}

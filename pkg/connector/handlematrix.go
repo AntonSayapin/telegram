@@ -55,7 +55,6 @@ import (
 	"maunium.net/go/mautrix/id"
 
 	"go.mau.fi/mautrix-telegram/pkg/connector/media"
-	"go.mau.fi/mautrix-telegram/pkg/gotd/telegram/message"
 	"go.mau.fi/mautrix-telegram/pkg/gotd/telegram/uploader"
 	"go.mau.fi/mautrix-telegram/pkg/gotd/tg"
 	"go.mau.fi/mautrix-telegram/pkg/gotd/tgerr"
@@ -222,11 +221,9 @@ func (tc *TelegramClient) pollSponsoredMessage(ctx context.Context, portal *brid
 	if oldSponsoredMessageMXID != "" {
 		_, err = tc.main.Bridge.Bot.SendMessage(ctx, portal.MXID, event.EventRedaction, &event.Content{
 			Parsed: &event.RedactionEventContent{
-				Reason:  "new sponsored message sent",
-				Redacts: oldSponsoredMessageMXID,
-			},
-			Raw: map[string]any{
-				"com.beeper.dont_render_redacted_placeholder": true,
+				Reason:                "new sponsored message sent",
+				Redacts:               oldSponsoredMessageMXID,
+				DontRenderPlaceholder: true,
 			},
 		}, &bridgev2.MatrixSendExtra{Timestamp: time.Now()})
 		if err != nil {
@@ -274,13 +271,6 @@ func (tc *TelegramClient) transferMediaToTelegram(ctx context.Context, content *
 			}
 			uploadFilename = tempFile.Name()
 			info.MimeType = "image/webp"
-		} else if sticker && (info.MimeType != "video/webm" && info.MimeType != "application/x-tgsticker") {
-			uploadFilename, err = ffmpeg.ConvertPath(ctx, uploadFilename, ".webp", []string{}, []string{}, false)
-			if err != nil {
-				return fmt.Errorf("failed to convert sticker to webm: %w", err)
-			}
-			defer os.Remove(uploadFilename)
-			info.MimeType = "image/webp"
 		} else if sticker && info.MimeType == "video/lottie+json" {
 			uploadFilename, err = media.CompressGZip(f)
 			if err != nil {
@@ -288,6 +278,13 @@ func (tc *TelegramClient) transferMediaToTelegram(ctx context.Context, content *
 			}
 			defer os.Remove(uploadFilename)
 			info.MimeType = "application/x-tgsticker"
+		} else if sticker && (info.MimeType != "video/webm" && info.MimeType != "application/x-tgsticker") {
+			uploadFilename, err = ffmpeg.ConvertPath(ctx, uploadFilename, ".webp", []string{}, []string{}, false)
+			if err != nil {
+				return fmt.Errorf("failed to convert sticker to webm: %w", err)
+			}
+			defer os.Remove(uploadFilename)
+			info.MimeType = "image/webp"
 		} else if cfg, _, err := image.DecodeConfig(f); err != nil {
 			forceDocument = true
 		} else if fileInfo, err := f.Stat(); err != nil {
@@ -777,11 +774,20 @@ func (tc *TelegramClient) HandleMatrixMessageRemove(ctx context.Context, msg *br
 		return err
 	} else if peer, _, err := tc.inputPeerForPortalID(ctx, msg.Portal.ID); err != nil {
 		return err
+	} else if ch, ok := peer.(*tg.InputPeerChannel); ok {
+		_, err = tc.client.API().ChannelsDeleteMessages(ctx, &tg.ChannelsDeleteMessagesRequest{
+			Channel: &tg.InputChannel{
+				ChannelID:  ch.ChannelID,
+				AccessHash: ch.AccessHash,
+			},
+			ID: []int{messageID},
+		})
+		return err
 	} else {
-		_, err := message.NewSender(tc.client.API()).
-			To(peer).
-			Revoke().
-			Messages(ctx, messageID)
+		_, err = tc.client.API().MessagesDeleteMessages(ctx, &tg.MessagesDeleteMessagesRequest{
+			Revoke: true,
+			ID:     []int{messageID},
+		})
 		return err
 	}
 }
@@ -806,7 +812,17 @@ func (tc *TelegramClient) PreHandleMatrixReaction(ctx context.Context, msg *brid
 	keyNoVariation := variationselector.Remove(msg.Content.RelatesTo.Key)
 	emojiID := ids.MakeEmojiIDFromEmoticon(msg.Content.RelatesTo.Key)
 	if strings.Contains(msg.Content.RelatesTo.Key, "://") {
-		if file, err := tc.main.Store.TelegramFile.GetByMXC(ctx, id.ContentURIString(msg.Content.RelatesTo.Key)); err != nil {
+		if parsedMXC, err := tc.main.Bridge.Matrix.ParseContentURI(ctx, id.ContentURIString(msg.Content.RelatesTo.Key)); err == nil {
+			parsedMediaInfo, err := ids.ParseDirectMediaInfo(parsedMXC)
+			if err != nil {
+				return resp, fmt.Errorf("failed to parse reaction direct media MXC: %w", err)
+				// Note: the sticker peer type is only allowed here because custom emoji packs
+				// used to be accidentally imported with the wrong type.
+			} else if parsedMediaInfo.PeerType != ids.FakePeerTypeEmoji && parsedMediaInfo.PeerType != ids.FakePeerTypeSticker {
+				return resp, fmt.Errorf("direct media reaction MXC peer type %q is not emoji", parsedMediaInfo.PeerType)
+			}
+			emojiID = ids.MakeEmojiIDFromDocumentID(parsedMediaInfo.ID)
+		} else if file, err := tc.main.Store.TelegramFile.GetByMXC(ctx, id.ContentURIString(msg.Content.RelatesTo.Key)); err != nil {
 			return resp, err
 		} else if file == nil {
 			return resp, fmt.Errorf("reaction MXC URI %s does not correspond with any known Telegram files", msg.Content.RelatesTo.Key)
