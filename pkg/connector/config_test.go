@@ -66,3 +66,16 @@ filter:
 	require.NotNil(t, loadMediaFalse.Filter.Channels.LoadMedia)
 	require.False(t, *loadMediaFalse.Filter.Channels.LoadMedia)
 }
+
+func TestPortalNameConfigDefaults(t *testing.T) {
+	var cfg TelegramConfig
+	require.NoError(t, yaml.Unmarshal([]byte(`
+filter:
+  channels:
+    enabled: true
+    mode: blacklist
+    list: []
+`), &cfg))
+	require.Empty(t, cfg.PortalNamePrefix)
+	require.Empty(t, cfg.PortalNameSuffix)
+}

@@ -292,6 +292,7 @@ func (tc *TelegramClient) handleDialogs(ctx context.Context, dialogList []tg.Dia
 				if err != nil {
 					log.Err(err).Msg("Failed to get channel members")
 				}
+				tc.applyPortalNameFormat(chatInfo)
 			case *tg.ChannelForbidden:
 				log.Debug().
 					Int64("channel_id", peer.ChannelID).

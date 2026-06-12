@@ -59,6 +59,8 @@ filter:
 
 Limitation: Telegram albums/grouped media may currently appear as separate `[media: 1]` placeholders until an album collector is implemented before message conversion.
 
+`portal_name_prefix` / `portal_name_suffix` add a global prefix/suffix to Matrix portal room names only. They do not affect ghost/user display names or Telegram peer IDs.
+
 TODO: manual allow/deny overrides are currently stored per Telegram peer, not per forum topic.
 
 ## Sponsors

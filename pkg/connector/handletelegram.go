@@ -178,6 +178,7 @@ func (tc *TelegramClient) onUpdateChannel(ctx context.Context, e tg.Entities, up
 			if err != nil {
 				return nil, err
 			}
+			tc.applyPortalNameFormat(chatInfo)
 			if portal.MXID == "" {
 				err = tc.fillChannelMembers(ctx, mfm, chatInfo.Members)
 				if err != nil {
@@ -314,9 +315,10 @@ func (tc *TelegramClient) handleServiceMessage(ctx context.Context, msg *tg.Mess
 	}
 	switch action := msg.Action.(type) {
 	case *tg.MessageActionChatEditTitle:
+		title := tc.formatPortalName(action.Title)
 		res := tc.main.Bridge.QueueRemoteEvent(tc.userLogin, &simplevent.ChatInfoChange{
 			EventMeta:      eventMeta.WithType(bridgev2.RemoteEventChatInfoChange),
-			ChatInfoChange: &bridgev2.ChatInfoChange{ChatInfo: &bridgev2.ChatInfo{Name: &action.Title}},
+			ChatInfoChange: &bridgev2.ChatInfoChange{ChatInfo: &bridgev2.ChatInfo{Name: &title}},
 		})
 		return resultToError(res)
 	case *tg.MessageActionChatEditPhoto:

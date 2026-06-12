@@ -139,6 +139,10 @@ disable_view_once: false
 # Should video URL previews be bridged as m.video messages to Matrix?
 # By default, video URL previews will not be bridged.
 video_url_preview_as_file: false
+# Prefix/suffix to add to Matrix portal room names created by the bridge.
+# This does not affect Telegram ghost/user display names.
+portal_name_prefix: ""
+portal_name_suffix: " (tg)"
 # Displayname template for Telegram users.
 # {{ .FullName }} - the full name of the Telegram user
 # {{ .FirstName }} - the first name of the Telegram user

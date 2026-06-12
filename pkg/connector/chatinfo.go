@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"iter"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -121,6 +122,7 @@ func (tc *TelegramClient) getDMChatInfo(ctx context.Context, userID int64) (*bri
 		chatInfo.Name = ptr.Ptr("Telegram Saved Messages")
 		chatInfo.Topic = ptr.Ptr("Your Telegram cloud storage chat")
 	}
+	tc.applyPortalNameFormat(&chatInfo)
 	return &chatInfo, nil
 }
 
@@ -229,6 +231,24 @@ func (tc *TelegramClient) wrapChatInfo(portalID networkid.PortalID, rawChat tg.C
 		return changed
 	}
 	return &info, &mfm, nil
+}
+
+func (tc *TelegramClient) formatPortalName(name string) string {
+	prefix := tc.main.Config.PortalNamePrefix
+	suffix := tc.main.Config.PortalNameSuffix
+	if prefix != "" && !strings.HasPrefix(name, prefix) {
+		name = prefix + name
+	}
+	if suffix != "" && !strings.HasSuffix(name, suffix) {
+		name += suffix
+	}
+	return name
+}
+
+func (tc *TelegramClient) applyPortalNameFormat(info *bridgev2.ChatInfo) {
+	if info != nil && info.Name != nil {
+		*info.Name = tc.formatPortalName(*info.Name)
+	}
 }
 
 func (tc *TelegramClient) overrideChatInfoWithTopic(info *bridgev2.ChatInfo, topic *tg.ForumTopic) {
@@ -504,6 +524,7 @@ func (tc *TelegramClient) GetChatInfo(ctx context.Context, portal *bridgev2.Port
 			return nil, err
 		}
 		info, _, err := tc.wrapFullChatInfo(portal.ID, fullChat)
+		tc.applyPortalNameFormat(info)
 		return info, err
 	case ids.PeerTypeChannel:
 		accessHash, err := tc.ScopedStore.GetAccessHash(ctx, ids.PeerTypeChannel, id)
@@ -529,6 +550,7 @@ func (tc *TelegramClient) GetChatInfo(ctx context.Context, portal *bridgev2.Port
 				return nil, err
 			}
 			tc.overrideChatInfoWithTopic(info, topic)
+			tc.applyPortalNameFormat(info)
 			return info, nil
 		}
 		fullChat, err := APICallWithUpdates(ctx, tc, func() (*tg.MessagesChatFull, error) {
@@ -545,6 +567,7 @@ func (tc *TelegramClient) GetChatInfo(ctx context.Context, portal *bridgev2.Port
 		if err != nil {
 			zerolog.Ctx(ctx).Err(err).Msg("Failed to get channel members")
 		}
+		tc.applyPortalNameFormat(info)
 		return info, nil
 	default:
 		return nil, fmt.Errorf("unsupported peer type %s", peerType)
