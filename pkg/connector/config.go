@@ -66,6 +66,7 @@ type PeerFilterConfig struct {
 	Enabled    *bool    `yaml:"enabled"`
 	Mode       string   `yaml:"mode"`
 	ManualOnly bool     `yaml:"manual_only"`
+	LoadMedia  *bool    `yaml:"load_media"`
 	List       []string `yaml:"list"`
 }
 
@@ -171,6 +172,15 @@ func (c *TelegramConfig) PostProcess() error {
 	if c.Filter.Channels.Enabled == nil {
 		c.Filter.Channels.Enabled = boolPtr(true)
 	}
+	if c.Filter.Users.LoadMedia == nil {
+		c.Filter.Users.LoadMedia = boolPtr(true)
+	}
+	if c.Filter.Groups.LoadMedia == nil {
+		c.Filter.Groups.LoadMedia = boolPtr(true)
+	}
+	if c.Filter.Channels.LoadMedia == nil {
+		c.Filter.Channels.LoadMedia = boolPtr(true)
+	}
 
 	if c.Filter.Users.Mode == "" {
 		c.Filter.Users.Mode = "blacklist"
@@ -228,16 +238,19 @@ func upgradeConfig(helper up.Helper) {
 	helper.Copy(up.Bool, "filter", "users", "enabled")
 	helper.Copy(up.Str, "filter", "users", "mode")
 	helper.Copy(up.Bool, "filter", "users", "manual_only")
+	helper.Copy(up.Bool, "filter", "users", "load_media")
 	helper.Copy(up.Str|up.List, "filter", "users", "list")
 
 	helper.Copy(up.Bool, "filter", "groups", "enabled")
 	helper.Copy(up.Str, "filter", "groups", "mode")
 	helper.Copy(up.Bool, "filter", "groups", "manual_only")
+	helper.Copy(up.Bool, "filter", "groups", "load_media")
 	helper.Copy(up.Str|up.List, "filter", "groups", "list")
 
 	helper.Copy(up.Bool, "filter", "channels", "enabled")
 	helper.Copy(up.Str, "filter", "channels", "mode")
 	helper.Copy(up.Bool, "filter", "channels", "manual_only")
+	helper.Copy(up.Bool, "filter", "channels", "load_media")
 	helper.Copy(up.Str|up.List, "filter", "channels", "list")
 
 	helper.Copy(up.Bool, "takeout", "dialog_sync")

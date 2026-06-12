@@ -81,6 +81,48 @@ func mediaHashID(ctx context.Context, m tg.MessageMediaClass) []byte {
 	return nil
 }
 
+func shouldConvertMediaToPlaceholder(media tg.MessageMediaClass) bool {
+	if media == nil {
+		return false
+	}
+	switch media.TypeID() {
+	case tg.MessageMediaPhotoTypeID, tg.MessageMediaDocumentTypeID:
+		return true
+	default:
+		return false
+	}
+}
+
+func formatMediaPlaceholder(count int, caption string) string {
+	if count < 1 {
+		count = 1
+	}
+	body := fmt.Sprintf("[media: %d]", count)
+	caption = strings.TrimSpace(caption)
+	if caption != "" {
+		body += " " + caption
+	}
+	return body
+}
+
+func (tc *TelegramClient) logSkippedMediaTransfer(ctx context.Context, portal *bridgev2.Portal, msg *tg.Message, count int) {
+	caption := strings.TrimSpace(msg.Message)
+	logEvent := zerolog.Ctx(ctx).Debug().
+		Str("reason", "load_media disabled").
+		Str("portal_id", string(portal.ID)).
+		Int("media_count", count).
+		Bool("caption", caption != "")
+	if peerType, peerID, ok := tc.peerTypeAndID(msg.PeerID); ok {
+		logEvent = logEvent.
+			Str("peer_type", string(peerType)).
+			Int64("peer_id", peerID)
+	}
+	if groupedID, ok := msg.GetGroupedID(); ok {
+		logEvent = logEvent.Int64("grouped_id", groupedID)
+	}
+	logEvent.Msg("Skipping Telegram media transfer")
+}
+
 func (tc *TelegramClient) mediaToMatrix(
 	ctx context.Context,
 	portal *bridgev2.Portal,
@@ -183,7 +225,41 @@ func (tc *TelegramClient) convertToMatrix(
 
 	cm = &bridgev2.ConvertedMessage{}
 	hasher := sha256.New()
-	if rm, ok := msg.GetRichMessage(); ok {
+	msgMedia, hasTelegramMedia := msg.GetMedia()
+	loadMedia := true
+	if hasTelegramMedia {
+		loadMedia = tc.shouldLoadMediaForTelegramPeer(ctx, msg.PeerID)
+	}
+	// TODO: Telegram grouped media currently reaches this layer as one tg.Message at a time:
+	// onUpdateNewMessage queues each update separately, and backfill converts each fetched message
+	// before bridgev2 batch-send. A grouped placeholder with count > 1 needs an album collector
+	// before convertToMatrix so it can see all messages with the same GroupedID, choose the first
+	// non-empty caption, emit one ConvertedMessage, and suppress the rest without breaking DB mapping.
+	mediaPlaceholderCount := 1
+	replaceMediaWithPlaceholder := hasTelegramMedia && !loadMedia && shouldConvertMediaToPlaceholder(msgMedia)
+	skipWebPageMediaTransfer := hasTelegramMedia &&
+		!loadMedia &&
+		msgMedia.TypeID() == tg.MessageMediaWebPageTypeID &&
+		tc.main.Config.VideoURLPreviewAsFile &&
+		unwrapWebPage(msgMedia) != nil
+	skipMediaConversion := replaceMediaWithPlaceholder || skipWebPageMediaTransfer
+	if replaceMediaWithPlaceholder {
+		body := formatMediaPlaceholder(mediaPlaceholderCount, msg.Message)
+		hasher.Write([]byte(body))
+		cm.Parts = []*bridgev2.ConvertedMessagePart{{
+			Type: event.EventMessage,
+			Content: &event.MessageEventContent{
+				MsgType: event.MsgText,
+				Body:    body,
+			},
+			Extra: map[string]any{
+				"fi.mau.telegram.media_placeholder": map[string]any{
+					"count": mediaPlaceholderCount,
+				},
+			},
+		}}
+		tc.logSkippedMediaTransfer(ctx, portal, msg, mediaPlaceholderCount)
+	} else if rm, ok := msg.GetRichMessage(); ok {
 		// TODO this probably won't write anything, add a better hasher
 		hasher.Write([]byte(msg.Message))
 		content := tc.parseRichText(ctx, &rm)
@@ -195,10 +271,10 @@ func (tc *TelegramClient) convertToMatrix(
 		hasher.Write([]byte(msg.Message))
 
 		content := tc.parseBodyAndHTML(ctx, msg.Message, msg.Entities)
-		if media, ok := msg.GetMedia(); ok && media.TypeID() == tg.MessageMediaWebPageTypeID {
+		if hasTelegramMedia && msgMedia.TypeID() == tg.MessageMediaWebPageTypeID {
 			webpageCtx, webpageCtxCancel := context.WithTimeout(ctx, time.Second*5)
 			defer webpageCtxCancel()
-			preview, err := tc.webpageToBeeperLinkPreview(webpageCtx, portal, intent, msg, media)
+			preview, err := tc.webpageToBeeperLinkPreview(webpageCtx, portal, intent, msg, msgMedia)
 			if err != nil {
 				log.Err(err).Msg("Failed to convert webpage to link preview")
 			} else if preview != nil {
@@ -214,24 +290,32 @@ func (tc *TelegramClient) convertToMatrix(
 	}
 
 	var contentURI id.ContentURIString
-	mediaPart, disappearingSetting, mediaHashID := tc.mediaToMatrix(ctx, portal, intent, msg)
-	if mediaPart != nil {
-		hasher.Write(mediaHashID)
-		cm.Parts = append(cm.Parts, mediaPart)
-		// Force stickers into images if there is a caption (usually there shouldn't be)
-		if mediaPart.Type == event.EventSticker && len(cm.Parts) == 2 {
-			mediaPart.Type = event.EventMessage
-			mediaPart.Content.MsgType = event.MsgImage
-		}
-		cm.MergeCaption()
+	var disappearingSetting *database.DisappearingSetting
+	if skipWebPageMediaTransfer {
+		tc.logSkippedMediaTransfer(ctx, portal, msg, mediaPlaceholderCount)
+	}
+	if !skipMediaConversion {
+		var mediaPart *bridgev2.ConvertedMessagePart
+		var mediaHashID []byte
+		mediaPart, disappearingSetting, mediaHashID = tc.mediaToMatrix(ctx, portal, intent, msg)
+		if mediaPart != nil {
+			hasher.Write(mediaHashID)
+			cm.Parts = append(cm.Parts, mediaPart)
+			// Force stickers into images if there is a caption (usually there shouldn't be)
+			if mediaPart.Type == event.EventSticker && len(cm.Parts) == 2 {
+				mediaPart.Type = event.EventMessage
+				mediaPart.Content.MsgType = event.MsgImage
+			}
+			cm.MergeCaption()
 
-		contentURI = mediaPart.Content.URL
-		if contentURI == "" && mediaPart.Content.File != nil {
-			contentURI = mediaPart.Content.File.URL
-		}
+			contentURI = mediaPart.Content.URL
+			if contentURI == "" && mediaPart.Content.File != nil {
+				contentURI = mediaPart.Content.File.URL
+			}
 
-		if disappearingSetting != nil {
-			cm.Disappear = *disappearingSetting
+			if disappearingSetting != nil {
+				cm.Disappear = *disappearingSetting
+			}
 		}
 	}
 	if len(cm.Parts) == 0 {
@@ -483,6 +567,10 @@ func (tc *TelegramClient) webpageToBeeperLinkPreview(ctx context.Context, portal
 	}
 
 	if photo, ok := webpage.Photo.(*tg.Photo); ok && (!tc.main.Config.VideoURLPreviewAsFile || unwrapWebPage(msgMedia) == nil) {
+		if !tc.shouldLoadMediaForTelegramPeer(ctx, msg.PeerID) {
+			tc.logSkippedMediaTransfer(ctx, portal, msg, 1)
+			return preview, nil
+		}
 		var fileInfo *event.FileInfo
 		transferer := media.NewTransferer(tc.client.API()).WithPhoto(photo)
 		if tc.main.useDirectMedia {

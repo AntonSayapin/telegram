@@ -82,18 +82,21 @@ filter:
     enabled: true
     mode: blacklist
     manual_only: false
+    load_media: true
     list: []
 
   groups:
     enabled: true
     mode: blacklist
     manual_only: true
+    load_media: false
     list: []
 
   channels:
     enabled: true
     mode: blacklist
     manual_only: true
+    load_media: false
     list: []
 
 takeout:

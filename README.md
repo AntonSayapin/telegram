@@ -32,18 +32,21 @@ filter:
     enabled: false
     mode: blacklist
     manual_only: false
+    load_media: true
     list: []
 
   groups:
     enabled: false
     mode: blacklist
     manual_only: true
+    load_media: false
     list: []
 
   channels:
     enabled: true
     mode: whitelist
     manual_only: true
+    load_media: false
     list:
       - "-1001234567890"
       - "-1009876543210"
@@ -51,6 +54,10 @@ filter:
 ```
 
 `enabled: false` disables both automatic and manual bridging for that peer type. With `manual_only: true`, peers still need to pass the blacklist/whitelist, but Matrix rooms are only created after a successful manual `bridge`; `unbridge` records a persistent deny state so new Telegram messages do not recreate the room.
+
+`load_media: false` keeps text messages bridged for allowed peers, but replaces Telegram media uploads with a text placeholder instead of downloading the file from Telegram and uploading it to Matrix. If the option is omitted, it defaults to `true` for backwards compatibility.
+
+Limitation: Telegram albums/grouped media may currently appear as separate `[media: 1]` placeholders until an album collector is implemented before message conversion.
 
 TODO: manual allow/deny overrides are currently stored per Telegram peer, not per forum topic.
 

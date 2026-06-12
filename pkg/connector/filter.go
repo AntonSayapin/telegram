@@ -78,6 +78,29 @@ func (tc *TelegramClient) allowPeerForManualBridge(ctx context.Context, peerType
 	return tc.allowPeerByConfig(ctx, peerType, peerID)
 }
 
+func (tc *TelegramClient) shouldLoadMediaForPeer(
+	ctx context.Context,
+	peerType ids.PeerType,
+	peerID int64,
+) bool {
+	_ = ctx
+	_ = peerID
+	filter := tc.filterForPeerType(peerType)
+	return filter.LoadMedia == nil || *filter.LoadMedia
+}
+
+func (tc *TelegramClient) shouldLoadMediaForTelegramPeer(ctx context.Context, peer tg.PeerClass) bool {
+	peerType, peerID, ok := tc.peerTypeAndID(peer)
+	if !ok {
+		zerolog.Ctx(ctx).Debug().
+			Str("peer_type", string(peerType)).
+			Int64("peer_id", peerID).
+			Msg("Allowing Telegram media load because peer type could not be parsed")
+		return true
+	}
+	return tc.shouldLoadMediaForPeer(ctx, peerType, peerID)
+}
+
 func (tc *TelegramClient) allowPeerByConfig(
 	ctx context.Context,
 	peerType ids.PeerType,

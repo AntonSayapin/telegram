@@ -29,3 +29,40 @@ filter:
 `), &present))
 	require.True(t, present.Filter.Channels.ManualOnly)
 }
+
+func TestPeerFilterLoadMediaConfig(t *testing.T) {
+	var missing TelegramConfig
+	require.NoError(t, yaml.Unmarshal([]byte(`
+filter:
+  users:
+    enabled: true
+    mode: blacklist
+    list: []
+`), &missing))
+	require.NotNil(t, missing.Filter.Users.LoadMedia)
+	require.True(t, *missing.Filter.Users.LoadMedia)
+
+	var loadMediaTrue TelegramConfig
+	require.NoError(t, yaml.Unmarshal([]byte(`
+filter:
+  users:
+    enabled: true
+    mode: blacklist
+    load_media: true
+    list: []
+`), &loadMediaTrue))
+	require.NotNil(t, loadMediaTrue.Filter.Users.LoadMedia)
+	require.True(t, *loadMediaTrue.Filter.Users.LoadMedia)
+
+	var loadMediaFalse TelegramConfig
+	require.NoError(t, yaml.Unmarshal([]byte(`
+filter:
+  channels:
+    enabled: true
+    mode: blacklist
+    load_media: false
+    list: []
+`), &loadMediaFalse))
+	require.NotNil(t, loadMediaFalse.Filter.Channels.LoadMedia)
+	require.False(t, *loadMediaFalse.Filter.Channels.LoadMedia)
+}
