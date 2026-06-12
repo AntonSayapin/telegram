@@ -1,3 +1,20 @@
+# Unreleased
+
+Fork-specific changes:
+
+* Added custom Telegram peer filtering with per-type `enabled`, `mode`,
+  `manual_only` and `load_media` settings.
+* Added persistent manual allow/deny overrides for manual bridging.
+* Added `!tg addressbook` for listing discovered Telegram peers from portal
+  records without creating Matrix rooms or loading media.
+* Added global `portal_name_prefix` and `portal_name_suffix` settings for
+  Matrix portal room names.
+* Added Docker release publishing to GHCR and a Helm chart for the
+  `StatefulSet/mautrix-telegram` production deployment with existing PVC
+  safety checks.
+  * Release builds run from `v*.*.*-antonsayapin` tags and publish the same
+    tag as the GHCR image tag.
+
 # v26.05
 
 * Updated Telegram API to layer 225.

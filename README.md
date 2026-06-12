@@ -29,14 +29,14 @@ A new top-level `filter` section was added to the bridge config:
 ```yaml
 filter:
   users:
-    enabled: false
+    enabled: true
     mode: blacklist
     manual_only: false
     load_media: true
     list: []
 
   groups:
-    enabled: false
+    enabled: true
     mode: blacklist
     manual_only: true
     load_media: false
@@ -44,20 +44,21 @@ filter:
 
   channels:
     enabled: true
-    mode: whitelist
+    mode: blacklist
     manual_only: true
     load_media: false
-    list:
-      - "-1001234567890"
-      - "-1009876543210"
-      - "regex:-100555[0-9]+"
+    list: []
 ```
 
 `enabled: false` disables both automatic and manual bridging for that peer type. With `manual_only: true`, peers still need to pass the blacklist/whitelist, but Matrix rooms are only created after a successful manual `bridge`; `unbridge` records a persistent deny state so new Telegram messages do not recreate the room.
 
+In `mode: blacklist`, all peers of the type are allowed except entries in `list`. In `mode: whitelist`, only entries in `list` are allowed. Channel and supergroup IDs may be written in the Telegram-friendly `-100...` form.
+
 `load_media: false` keeps text messages bridged for allowed peers, but replaces Telegram media uploads with a text placeholder instead of downloading the file from Telegram and uploading it to Matrix. If the option is omitted, it defaults to `true` for backwards compatibility.
 
 Limitation: Telegram albums/grouped media may currently appear as separate `[media: 1]` placeholders until an album collector is implemented before message conversion.
+
+The `!tg addressbook` command lists known Telegram peers that have been discovered by dialog sync and stored as portal records. It supports type, bridged/unbridged, manual state, page, and search filters, and does not create rooms, download media, backfill, or change manual allow/deny state.
 
 `portal_name_prefix` / `portal_name_suffix` add a global prefix/suffix to Matrix portal room names only. They do not affect ghost/user display names or Telegram peer IDs.
 
@@ -70,19 +71,27 @@ This fork includes a Docker release workflow and a Helm chart for the production
 Release image flow:
 
 ```bash
-git tag v0.1.0
+export RELEASE_TAG=v26.05.3-antonsayapin
+
+git tag "$RELEASE_TAG"
 git push origin custom-peer-filter
-git push origin v0.1.0
+git push origin "$RELEASE_TAG"
 ```
 
 The release tag build pushes:
 
 ```text
-ghcr.io/antonsayapin/mautrix-telegram:v0.1.0
+ghcr.io/antonsayapin/mautrix-telegram:v26.05.3-antonsayapin
 ghcr.io/antonsayapin/mautrix-telegram:latest
 ```
 
+The Docker workflow runs on tags matching `v*.*.*-antonsayapin` and uses the git tag name as the Docker image tag.
+
 The Helm chart is in `deploy/helm/mautrix-telegram`. It deploys `StatefulSet/mautrix-telegram` and `Service/mautrix-telegram` in the target namespace, mounts the existing `mautrix-telegram-data` PVC at `/data`, and expects `/data/config.yaml` and `/data/registration.yaml` to already exist.
+
+The chart intentionally does not create a PVC. `persistence.existingClaim` is required and template rendering fails if it is empty, to avoid accidentally starting the bridge without the existing `/data` volume. The chart also enforces `replicaCount: 1` because the production PVC is RWO and the bridge must be single-instance.
+
+Liveness and readiness probes are disabled by default because this deployment does not currently expose a confirmed health endpoint. Resources and security context are left minimal by default.
 
 First migration warning:
 
@@ -104,12 +113,14 @@ Server upgrade flow:
 ```bash
 cd ~/mautrix-telegram-install/telegram
 
+export RELEASE_TAG=v26.05.3-antonsayapin
+
 git fetch --tags origin
-git checkout v0.1.0
+git checkout "$RELEASE_TAG"
 
 helm package deploy/helm/mautrix-telegram --destination ~/mautrix-telegram-install
 
-sed -i 's/tag: v[0-9]\+\.[0-9]\+\.[0-9]\+/tag: v0.1.0/' \
+sed -i "s/^  tag: .*/  tag: ${RELEASE_TAG}/" \
   ~/ess-config-values/mautrix-telegram/mautrix-telegram-values.yaml
 
 helm upgrade --install mautrix-telegram \
@@ -117,6 +128,8 @@ helm upgrade --install mautrix-telegram \
   --namespace ess \
   -f ~/ess-config-values/mautrix-telegram/mautrix-telegram-values.yaml
 ```
+
+The chart package filename follows `deploy/helm/mautrix-telegram/Chart.yaml` (`mautrix-telegram-0.1.0.tgz` in the example above). The container image tag is controlled separately by `image.tag` in values.
 
 Do not commit generated `.tgz` Helm packages.
 

@@ -48,6 +48,14 @@
   * [x] Automatic portal creation
     * [x] At startup
     * [x] When receiving invite or message
+  * [x] Custom peer filtering by Telegram peer type
+    * [x] Blacklist/whitelist modes for users, legacy groups, channels and supergroups
+    * [x] `manual_only` peer types with persistent manual allow/deny overrides
+    * [x] `!tg addressbook` for listing discovered portal records without creating rooms
+    * [x] Per-peer-type `load_media` option to replace Telegram media with text placeholders
+    * [ ] Album/grouped media aggregation for `load_media: false` placeholders
+  * [x] Global Matrix portal room name prefix/suffix
+  * [x] Production GHCR Docker release workflow and Helm chart for StatefulSet deployment
   * [x] Private chat creation by inviting Matrix ghost of Telegram user to new room
   * [x] Option to use bot to relay messages for unauthenticated Matrix users (relaybot)
   * [x] Option to use own Matrix account for messages sent from other Telegram clients (double puppeting)
