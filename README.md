@@ -8,7 +8,7 @@
 
 This fork adds per-peer-type filtering for Telegram chats before they are bridged into Matrix.
 
-The goal is to control which Telegram peers can create or update Matrix portal rooms.
+The goal is to control which Telegram peers can create or update Matrix portal rooms. Peer types can also be marked `manual_only` to let dialog sync discover them without creating Matrix rooms until a user runs the `bridge` command.
 
 ### Supported Telegram peer types
 
@@ -31,21 +31,28 @@ filter:
   users:
     enabled: false
     mode: blacklist
+    manual_only: false
     list: []
 
   groups:
     enabled: false
     mode: blacklist
+    manual_only: true
     list: []
 
   channels:
     enabled: true
     mode: whitelist
+    manual_only: true
     list:
       - "-1001234567890"
       - "-1009876543210"
       - "regex:-100555[0-9]+"
 ```
+
+`enabled: false` disables both automatic and manual bridging for that peer type. With `manual_only: true`, peers still need to pass the blacklist/whitelist, but Matrix rooms are only created after a successful manual `bridge`; `unbridge` records a persistent deny state so new Telegram messages do not recreate the room.
+
+TODO: manual allow/deny overrides are currently stored per Telegram peer, not per forum topic.
 
 ## Sponsors
 * [Joel Lehtonen / Zouppen](https://github.com/zouppen)

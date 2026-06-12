@@ -162,6 +162,10 @@ func (tc *TelegramClient) handleTelegramReactions(ctx context.Context, peer tg.P
 		Int("message_id", msgID).
 		Logger().WithContext(ctx)
 
+	if !tc.allowPeerForAutomatic(ctx, peer) {
+		return nil
+	}
+
 	data, err := tc.prepareReactionSync(ctx, peer, msgID, reactions)
 	if err != nil {
 		return err

@@ -128,6 +128,10 @@ func (tc *TelegramClient) onUpdateChannel(ctx context.Context, e tg.Entities, up
 
 	// TODO resync topic portals?
 	portalKey := tc.makePortalKeyFromID(ids.PeerTypeChannel, update.ChannelID, 0)
+	if !tc.allowPeerForAutomaticByID(ctx, ids.PeerTypeChannel, update.ChannelID) {
+		log.Debug().Msg("Ignoring UpdateChannel because peer is not allowed for automatic sync")
+		return nil
+	}
 
 	// TODO is using the info in entities safe?
 	channel, ok := e.Channels[update.ChannelID]
@@ -190,7 +194,7 @@ func (tc *TelegramClient) onUpdateNewMessage(ctx context.Context, entities tg.En
 	log := *zerolog.Ctx(ctx)
 	switch msg := update.GetMessage().(type) {
 	case *tg.Message:
-		if !tc.allowPeer(ctx, msg.PeerID) {
+		if !tc.allowPeerForAutomatic(ctx, msg.PeerID) {
 			return nil
 		}
 		var isBroadcastChannel bool
@@ -287,7 +291,7 @@ func rawGetTopicID(rawReplyTo tg.MessageReplyHeaderClass) int {
 }
 
 func (tc *TelegramClient) handleServiceMessage(ctx context.Context, msg *tg.MessageService) error {
-	if !tc.allowPeer(ctx, msg.PeerID) {
+	if !tc.allowPeerForAutomatic(ctx, msg.PeerID) {
 		return nil
 	}
 	log := zerolog.Ctx(ctx)
@@ -952,21 +956,21 @@ func (tc *TelegramClient) onUpdate(ctx context.Context, e tg.Entities, upd tg.Up
 	case *tg.UpdateBotMessageReaction:
 		return tc.onBotMessageReaction(ctx, update)
 	case *tg.UpdateUserTyping:
-		return tc.handleTyping(tc.makePortalKeyFromID(ids.PeerTypeUser, update.UserID, 0), tc.senderForUserID(update.UserID), update.Action)
+		return tc.handleTyping(ctx, tc.makePortalKeyFromID(ids.PeerTypeUser, update.UserID, 0), tc.senderForUserID(update.UserID), update.Action)
 	case *tg.UpdateChatUserTyping:
 		if update.FromID.TypeID() != tg.PeerUserTypeID {
 			zerolog.Ctx(ctx).Warn().Str("from_id_type", update.FromID.TypeName()).Msg("unsupported from_id type")
 			return nil
 		}
-		return tc.handleTyping(tc.makePortalKeyFromID(ids.PeerTypeChat, update.ChatID, 0), tc.getPeerSender(update.FromID), update.Action)
+		return tc.handleTyping(ctx, tc.makePortalKeyFromID(ids.PeerTypeChat, update.ChatID, 0), tc.getPeerSender(update.FromID), update.Action)
 	case *tg.UpdateChannelUserTyping:
-		return tc.handleTyping(tc.makePortalKeyFromID(ids.PeerTypeChannel, update.ChannelID, update.TopMsgID), tc.getPeerSender(update.FromID), update.Action)
+		return tc.handleTyping(ctx, tc.makePortalKeyFromID(ids.PeerTypeChannel, update.ChannelID, update.TopMsgID), tc.getPeerSender(update.FromID), update.Action)
 	case *tg.UpdateReadHistoryOutbox:
 		return tc.updateReadReceipt(ctx, e, update)
 	case *tg.UpdateReadHistoryInbox:
-		return tc.onOwnReadReceipt(tc.makePortalKeyFromPeer(update.Peer, update.TopMsgID), update.MaxID)
+		return tc.onOwnReadReceipt(ctx, tc.makePortalKeyFromPeer(update.Peer, update.TopMsgID), update.MaxID)
 	case *tg.UpdateReadChannelInbox:
-		return tc.onOwnReadReceipt(tc.makePortalKeyFromID(ids.PeerTypeChannel, update.ChannelID, 0), update.MaxID)
+		return tc.onOwnReadReceipt(ctx, tc.makePortalKeyFromID(ids.PeerTypeChannel, update.ChannelID, 0), update.MaxID)
 	case *tg.UpdateNotifySettings:
 		return tc.onNotifySettings(ctx, e, update)
 	case *tg.UpdatePinnedDialogs:
@@ -993,6 +997,10 @@ func (tc *TelegramClient) onMessageReactions(ctx context.Context, update *tg.Upd
 }
 
 func (tc *TelegramClient) onBotMessageReaction(ctx context.Context, update *tg.UpdateBotMessageReaction) error {
+	if !tc.allowPeerForAutomatic(ctx, update.Peer) {
+		return nil
+	}
+
 	wrappedMessageID := ids.MakeMessageID(update.Peer, update.MsgID)
 	var portalKey networkid.PortalKey
 	var ok bool
@@ -1070,6 +1078,9 @@ func (tc *TelegramClient) onMessageEdit(ctx context.Context, update IGetMessage)
 		zerolog.Ctx(ctx).Warn().
 			Str("type_name", update.GetMessage().TypeName()).
 			Msg("edit message is not *tg.Message")
+		return nil
+	}
+	if !tc.allowPeerForAutomatic(ctx, msg.PeerID) {
 		return nil
 	}
 
@@ -1155,8 +1166,10 @@ func (tc *TelegramClient) onMessageEdit(ctx context.Context, update IGetMessage)
 	return resultToError(res)
 }
 
-func (tc *TelegramClient) handleTyping(portal networkid.PortalKey, sender bridgev2.EventSender, action tg.SendMessageActionClass) error {
+func (tc *TelegramClient) handleTyping(ctx context.Context, portal networkid.PortalKey, sender bridgev2.EventSender, action tg.SendMessageActionClass) error {
 	if sender.IsFromMe || (sender.Sender == tc.userID && sender.SenderLogin == tc.userLogin.ID) {
+		return nil
+	} else if !tc.allowPortalKeyForAutomatic(ctx, portal) {
 		return nil
 	}
 	timeout := time.Duration(6) * time.Second
@@ -1194,6 +1207,8 @@ func (tc *TelegramClient) updateReadReceipt(ctx context.Context, e tg.Entities, 
 		// Read receipts from other users are meaningless in chats/channels
 		// (they only say "someone read the message" and not who)
 		return nil
+	} else if !tc.allowPeerForAutomatic(ctx, update.Peer) {
+		return nil
 	}
 	res := tc.main.Bridge.QueueRemoteEvent(tc.userLogin, &simplevent.Receipt{
 		EventMeta: simplevent.EventMeta{
@@ -1213,7 +1228,10 @@ func (tc *TelegramClient) updateReadReceipt(ctx context.Context, e tg.Entities, 
 	return resultToError(res)
 }
 
-func (tc *TelegramClient) onOwnReadReceipt(portalKey networkid.PortalKey, maxID int) error {
+func (tc *TelegramClient) onOwnReadReceipt(ctx context.Context, portalKey networkid.PortalKey, maxID int) error {
+	if !tc.allowPortalKeyForAutomatic(ctx, portalKey) {
+		return nil
+	}
 	res := tc.main.Bridge.QueueRemoteEvent(tc.userLogin, &simplevent.Receipt{
 		EventMeta: simplevent.EventMeta{
 			Type:      bridgev2.RemoteEventReadReceipt,
@@ -1420,6 +1438,9 @@ func (tc *TelegramClient) onNotifySettings(ctx context.Context, e tg.Entities, u
 			Msg("Ignoring unsupported notify settings peer type")
 		return nil
 	}
+	if !tc.allowPortalKeyForAutomatic(ctx, portalKey) {
+		return nil
+	}
 
 	var mutedUntil *time.Time
 	if mu, ok := update.NotifySettings.GetMuteUntil(); ok {
@@ -1468,6 +1489,9 @@ func (tc *TelegramClient) onPinnedDialogs(ctx context.Context, e tg.Entities, ms
 		portalKey := tc.makePortalKeyFromPeer(dialog.Peer, 0)
 		delete(needsUnpinning, portalKey)
 		tc.metadata.PinnedDialogs = append(tc.metadata.PinnedDialogs, portalKey.ID)
+		if !tc.allowPortalKeyForAutomatic(ctx, portalKey) {
+			continue
+		}
 
 		res := tc.main.Bridge.QueueRemoteEvent(tc.userLogin, &simplevent.ChatInfoChange{
 			ChatInfoChange: &bridgev2.ChatInfoChange{
@@ -1494,6 +1518,9 @@ func (tc *TelegramClient) onPinnedDialogs(ctx context.Context, e tg.Entities, ms
 
 	var empty event.RoomTag
 	for portalKey := range needsUnpinning {
+		if !tc.allowPortalKeyForAutomatic(ctx, portalKey) {
+			continue
+		}
 		res := tc.main.Bridge.QueueRemoteEvent(tc.userLogin, &simplevent.ChatInfoChange{
 			ChatInfoChange: &bridgev2.ChatInfoChange{
 				ChatInfo: &bridgev2.ChatInfo{
@@ -1522,6 +1549,9 @@ func (tc *TelegramClient) onPinnedDialogs(ctx context.Context, e tg.Entities, ms
 
 func (tc *TelegramClient) onChatDefaultBannedRights(ctx context.Context, entities tg.Entities, update *tg.UpdateChatDefaultBannedRights) error {
 	// TODO update all topic portals
+	if !tc.allowPeerForAutomatic(ctx, update.Peer) {
+		return nil
+	}
 	res := tc.main.Bridge.QueueRemoteEvent(tc.userLogin, &simplevent.ChatInfoChange{
 		ChatInfoChange: &bridgev2.ChatInfoChange{
 			ChatInfo: &bridgev2.ChatInfo{
@@ -1591,6 +1621,8 @@ func (tc *TelegramClient) onPhoneCall(ctx context.Context, e tg.Entities, update
 		return nil
 	} else if call.ParticipantID != tc.telegramUserID {
 		log.Warn().Msg("Received phone call for user that is not us")
+		return nil
+	} else if !tc.allowPeerForAutomaticByID(ctx, ids.PeerTypeUser, call.AdminID) {
 		return nil
 	}
 

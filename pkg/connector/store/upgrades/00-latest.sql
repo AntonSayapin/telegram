@@ -1,4 +1,4 @@
--- v0 -> v8 (compatible with v2+): Latest revision
+-- v0 -> v10 (compatible with v2+): Latest revision
 
 CREATE TABLE telegram_user_state (
     user_id BIGINT NOT NULL PRIMARY KEY,
@@ -62,4 +62,15 @@ CREATE TABLE telegram_topic (
     topic_id   BIGINT NOT NULL,
 
     PRIMARY KEY (channel_id, topic_id)
+);
+
+CREATE TABLE telegram_peer_filter_override (
+    telegram_user_id BIGINT NOT NULL,
+    peer_type        TEXT   NOT NULL,
+    peer_id          BIGINT NOT NULL,
+    state            TEXT   NOT NULL,
+    created_at       BIGINT NOT NULL,
+    updated_at       BIGINT NOT NULL,
+
+    PRIMARY KEY (telegram_user_id, peer_type, peer_id)
 );

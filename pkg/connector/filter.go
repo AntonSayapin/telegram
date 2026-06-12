@@ -9,12 +9,18 @@ import (
 	"github.com/rs/zerolog"
 
 	"go.mau.fi/mautrix-telegram/pkg/connector/ids"
+	"go.mau.fi/mautrix-telegram/pkg/connector/store"
 	"go.mau.fi/mautrix-telegram/pkg/gotd/tg"
+	"maunium.net/go/mautrix/bridgev2/networkid"
 )
 
 func (tc *TelegramClient) allowPeer(ctx context.Context, peer tg.PeerClass) bool {
-	peerType, peerID := peerTypeAndID(peer)
-	if peerType == "" || peerID == 0 {
+	return tc.allowPeerForAutomatic(ctx, peer)
+}
+
+func (tc *TelegramClient) allowPeerForAutomatic(ctx context.Context, peer tg.PeerClass) bool {
+	peerType, peerID, ok := tc.peerTypeAndID(peer)
+	if !ok {
 		zerolog.Ctx(ctx).Warn().
 			Str("peer_type", string(peerType)).
 			Int64("peer_id", peerID).
@@ -22,6 +28,61 @@ func (tc *TelegramClient) allowPeer(ctx context.Context, peer tg.PeerClass) bool
 		return false
 	}
 
+	return tc.allowPeerForAutomaticByID(ctx, peerType, peerID)
+}
+
+func (tc *TelegramClient) allowPeerForAutomaticByID(ctx context.Context, peerType ids.PeerType, peerID int64) bool {
+	if !tc.allowPeerByConfig(ctx, peerType, peerID) {
+		return false
+	}
+
+	if state, ok := tc.getManualPeerState(ctx, peerType, peerID); ok {
+		switch state {
+		case store.PeerFilterOverrideDeny:
+			zerolog.Ctx(ctx).Debug().
+				Str("peer_type", string(peerType)).
+				Int64("peer_id", peerID).
+				Str("manual_state", state).
+				Msg("Rejecting Telegram peer because manual override denies automatic handling")
+			return false
+		case store.PeerFilterOverrideAllow:
+			return true
+		}
+	}
+
+	if tc.isManualOnlyPeer(peerType) {
+		zerolog.Ctx(ctx).Debug().
+			Str("peer_type", string(peerType)).
+			Int64("peer_id", peerID).
+			Bool("manual_only", true).
+			Msg("Rejecting Telegram peer for automatic handling because manual_only is enabled")
+		return false
+	}
+
+	return true
+}
+
+func (tc *TelegramClient) allowPortalKeyForAutomatic(ctx context.Context, portalKey networkid.PortalKey) bool {
+	peerType, peerID, _, err := ids.ParsePortalID(portalKey.ID)
+	if err != nil {
+		zerolog.Ctx(ctx).Warn().
+			Err(err).
+			Str("portal_id", string(portalKey.ID)).
+			Msg("Rejecting Telegram portal because portal ID could not be parsed")
+		return false
+	}
+	return tc.allowPeerForAutomaticByID(ctx, peerType, peerID)
+}
+
+func (tc *TelegramClient) allowPeerForManualBridge(ctx context.Context, peerType ids.PeerType, peerID int64) bool {
+	return tc.allowPeerByConfig(ctx, peerType, peerID)
+}
+
+func (tc *TelegramClient) allowPeerByConfig(
+	ctx context.Context,
+	peerType ids.PeerType,
+	peerID int64,
+) bool {
 	filter := tc.filterForPeerType(peerType)
 
 	if filter.Enabled != nil && !*filter.Enabled {
@@ -32,7 +93,7 @@ func (tc *TelegramClient) allowPeer(ctx context.Context, peer tg.PeerClass) bool
 		return false
 	}
 
-	switch filter.Mode {
+	switch strings.ToLower(filter.Mode) {
 	case "whitelist":
 		allowed := matchesPeerFilter(ctx, peerType, peerID, filter.List)
 		if !allowed {
@@ -61,8 +122,8 @@ func (tc *TelegramClient) allowPeer(ctx context.Context, peer tg.PeerClass) bool
 			Str("mode", filter.Mode).
 			Str("peer_type", string(peerType)).
 			Int64("peer_id", peerID).
-			Msg("Unknown Telegram peer filter mode, allowing peer")
-		return true
+			Msg("Unknown Telegram peer filter mode, rejecting peer")
+		return false
 	}
 }
 
@@ -83,17 +144,49 @@ func (tc *TelegramClient) filterForPeerType(peerType ids.PeerType) PeerFilterCon
 	}
 }
 
-func peerTypeAndID(peer tg.PeerClass) (ids.PeerType, int64) {
+func (tc *TelegramClient) peerTypeAndID(peer tg.PeerClass) (ids.PeerType, int64, bool) {
 	switch p := peer.(type) {
 	case *tg.PeerUser:
-		return ids.PeerTypeUser, p.UserID
+		return ids.PeerTypeUser, p.UserID, p.UserID != 0
 	case *tg.PeerChat:
-		return ids.PeerTypeChat, p.ChatID
+		return ids.PeerTypeChat, p.ChatID, p.ChatID != 0
 	case *tg.PeerChannel:
-		return ids.PeerTypeChannel, p.ChannelID
+		return ids.PeerTypeChannel, p.ChannelID, p.ChannelID != 0
 	default:
-		return "", 0
+		return "", 0, false
 	}
+}
+
+func (tc *TelegramClient) isManualOnlyPeer(peerType ids.PeerType) bool {
+	return tc.filterForPeerType(peerType).ManualOnly
+}
+
+func (tc *TelegramClient) getManualPeerState(
+	ctx context.Context,
+	peerType ids.PeerType,
+	peerID int64,
+) (state string, ok bool) {
+	if tc.ScopedStore == nil {
+		return "", false
+	}
+	state, ok, err := tc.ScopedStore.GetPeerFilterOverride(ctx, peerType, peerID)
+	if err != nil {
+		zerolog.Ctx(ctx).Warn().
+			Err(err).
+			Str("peer_type", string(peerType)).
+			Int64("peer_id", peerID).
+			Msg("Failed to load Telegram peer filter override, rejecting automatic handling")
+		return store.PeerFilterOverrideDeny, true
+	}
+	return state, ok
+}
+
+func (tc *TelegramClient) setManualPeerAllowed(ctx context.Context, peerType ids.PeerType, peerID int64) error {
+	return tc.ScopedStore.SetPeerFilterOverride(ctx, peerType, peerID, store.PeerFilterOverrideAllow)
+}
+
+func (tc *TelegramClient) setManualPeerDenied(ctx context.Context, peerType ids.PeerType, peerID int64) error {
+	return tc.ScopedStore.SetPeerFilterOverride(ctx, peerType, peerID, store.PeerFilterOverrideDeny)
 }
 
 func matchesPeerFilter(ctx context.Context, peerType ids.PeerType, peerID int64, list []string) bool {

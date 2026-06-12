@@ -214,7 +214,14 @@ func (tc *TelegramClient) handleDialogs(ctx context.Context, dialogList []tg.Dia
 			continue
 		}
 
-		if !tc.allowPeer(ctx, dialog.GetPeer()) {
+		peerType, peerID, ok := tc.peerTypeAndID(dialog.GetPeer())
+		if !ok {
+			log.Warn().
+				Stringer("peer", dialog.GetPeer()).
+				Msg("Skipping dialog with unknown Telegram peer")
+			continue
+		}
+		if !tc.allowPeerByConfig(ctx, peerType, peerID) {
 			continue
 		}
 
@@ -319,6 +326,18 @@ func (tc *TelegramClient) handleDialogs(ctx context.Context, dialogList []tg.Dia
 			if createLimit >= 0 && i >= createLimit {
 				continue
 			}
+		}
+
+		if !tc.allowPeerForAutomatic(ctx, dialog.GetPeer()) {
+			manualState, manualStateOK := tc.getManualPeerState(ctx, peerType, peerID)
+			log.Debug().
+				Str("peer_type", string(peerType)).
+				Int64("peer_id", peerID).
+				Bool("manual_only", tc.isManualOnlyPeer(peerType)).
+				Bool("manual_state_set", manualStateOK).
+				Str("manual_state", manualState).
+				Msg("Skipping automatic Matrix portal creation because Telegram peer is not allowed for automatic sync")
+			continue
 		}
 
 		tc.fillUserLocalMeta(chatInfo, dialog)

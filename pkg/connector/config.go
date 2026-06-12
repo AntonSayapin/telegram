@@ -63,9 +63,10 @@ type ProxyConfig struct {
 }
 
 type PeerFilterConfig struct {
-	Enabled *bool    `yaml:"enabled"`
-	Mode    string   `yaml:"mode"`
-	List    []string `yaml:"list"`
+	Enabled    *bool    `yaml:"enabled"`
+	Mode       string   `yaml:"mode"`
+	ManualOnly bool     `yaml:"manual_only"`
+	List       []string `yaml:"list"`
 }
 
 type FilterConfig struct {
@@ -226,14 +227,17 @@ func upgradeConfig(helper up.Helper) {
 
 	helper.Copy(up.Bool, "filter", "users", "enabled")
 	helper.Copy(up.Str, "filter", "users", "mode")
+	helper.Copy(up.Bool, "filter", "users", "manual_only")
 	helper.Copy(up.Str|up.List, "filter", "users", "list")
 
 	helper.Copy(up.Bool, "filter", "groups", "enabled")
 	helper.Copy(up.Str, "filter", "groups", "mode")
+	helper.Copy(up.Bool, "filter", "groups", "manual_only")
 	helper.Copy(up.Str|up.List, "filter", "groups", "list")
 
 	helper.Copy(up.Bool, "filter", "channels", "enabled")
 	helper.Copy(up.Str, "filter", "channels", "mode")
+	helper.Copy(up.Bool, "filter", "channels", "manual_only")
 	helper.Copy(up.Str|up.List, "filter", "channels", "list")
 
 	helper.Copy(up.Bool, "takeout", "dialog_sync")
@@ -278,6 +282,17 @@ func (tc *TelegramConnector) ValidateConfig() error {
 	}
 	if !slices.Contains([]string{"disable", "gif", "png", "webp", "webm"}, tc.Config.AnimatedSticker.Target) {
 		return fmt.Errorf("unsupported animated sticker target: %s", tc.Config.AnimatedSticker.Target)
+	}
+	for name, filter := range map[string]PeerFilterConfig{
+		"users":    tc.Config.Filter.Users,
+		"groups":   tc.Config.Filter.Groups,
+		"channels": tc.Config.Filter.Channels,
+	} {
+		switch strings.ToLower(filter.Mode) {
+		case "blacklist", "whitelist", "none", "":
+		default:
+			return fmt.Errorf("unsupported filter.%s.mode: %s", name, filter.Mode)
+		}
 	}
 	return nil
 }

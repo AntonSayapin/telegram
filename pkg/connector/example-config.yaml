@@ -81,16 +81,19 @@ filter:
   users:
     enabled: true
     mode: blacklist
+    manual_only: false
     list: []
 
   groups:
     enabled: true
     mode: blacklist
+    manual_only: true
     list: []
 
   channels:
     enabled: true
     mode: blacklist
+    manual_only: true
     list: []
 
 takeout:
