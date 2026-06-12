@@ -17,3 +17,9 @@
 /docs
 
 mautrix-telegram
+*.tgz
+
+!/deploy/
+!/deploy/helm/
+!/deploy/helm/mautrix-telegram/
+!/deploy/helm/mautrix-telegram/**

@@ -63,6 +63,63 @@ Limitation: Telegram albums/grouped media may currently appear as separate `[med
 
 TODO: manual allow/deny overrides are currently stored per Telegram peer, not per forum topic.
 
+## Production deployment
+
+This fork includes a Docker release workflow and a Helm chart for the production Kubernetes deployment.
+
+Release image flow:
+
+```bash
+git tag v0.1.0
+git push origin custom-peer-filter
+git push origin v0.1.0
+```
+
+The release tag build pushes:
+
+```text
+ghcr.io/antonsayapin/mautrix-telegram:v0.1.0
+ghcr.io/antonsayapin/mautrix-telegram:latest
+```
+
+The Helm chart is in `deploy/helm/mautrix-telegram`. It deploys `StatefulSet/mautrix-telegram` and `Service/mautrix-telegram` in the target namespace, mounts the existing `mautrix-telegram-data` PVC at `/data`, and expects `/data/config.yaml` and `/data/registration.yaml` to already exist.
+
+First migration warning:
+
+- The current manual `StatefulSet` and `Service` are not Helm-managed.
+- The first migration requires deleting the old `StatefulSet` and `Service` while keeping the PVC.
+- Never delete `mautrix-telegram-data`.
+
+Example first migration:
+
+```bash
+kubectl scale statefulset/mautrix-telegram -n ess --replicas=0
+kubectl delete statefulset mautrix-telegram -n ess
+kubectl delete service mautrix-telegram -n ess
+kubectl get pvc -n ess | grep mautrix-telegram
+```
+
+Server upgrade flow:
+
+```bash
+cd ~/mautrix-telegram-install/telegram
+
+git fetch --tags origin
+git checkout v0.1.0
+
+helm package deploy/helm/mautrix-telegram --destination ~/mautrix-telegram-install
+
+sed -i 's/tag: v[0-9]\+\.[0-9]\+\.[0-9]\+/tag: v0.1.0/' \
+  ~/ess-config-values/mautrix-telegram/mautrix-telegram-values.yaml
+
+helm upgrade --install mautrix-telegram \
+  ~/mautrix-telegram-install/mautrix-telegram-0.1.0.tgz \
+  --namespace ess \
+  -f ~/ess-config-values/mautrix-telegram/mautrix-telegram-values.yaml
+```
+
+Do not commit generated `.tgz` Helm packages.
+
 ## Sponsors
 * [Joel Lehtonen / Zouppen](https://github.com/zouppen)
 

@@ -1,0 +1,5 @@
+Service DNS:
+  mautrix-telegram.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}
+
+/data/config.yaml and /data/registration.yaml must already exist in PVC {{ .Values.persistence.existingClaim }}.
+Do not delete the PVC during migration.

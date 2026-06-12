@@ -1,0 +1,42 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/antonsayapin/mautrix-telegram
+  tag: v0.1.0
+  pullPolicy: IfNotPresent
+
+imagePullSecrets:
+  - name: ghcr-pull-secret
+
+service:
+  type: ClusterIP
+  port: 29317
+  targetPort: 29317
+  portName: appservice
+  publishNotReadyAddresses: true
+
+persistence:
+  existingClaim: mautrix-telegram-data
+  mountPath: /data
+
+command:
+  - /usr/bin/mautrix-telegram
+
+args:
+  - -c
+  - /data/config.yaml
+
+probes:
+  liveness:
+    enabled: false
+  readiness:
+    enabled: false
+
+resources: {}
+
+podAnnotations: {}
+podLabels: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
