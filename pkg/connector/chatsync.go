@@ -214,6 +214,10 @@ func (tc *TelegramClient) handleDialogs(ctx context.Context, dialogList []tg.Dia
 			continue
 		}
 
+		if !tc.allowPeer(ctx, dialog.GetPeer()) {
+			continue
+		}
+
 		log := log.With().
 			Stringer("peer", dialog.Peer).
 			Int("top_message", dialog.TopMessage).

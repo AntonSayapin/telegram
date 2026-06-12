@@ -4,7 +4,48 @@
 [![Release](https://img.shields.io/github/release/mautrix/telegram/all.svg)](https://github.com/mautrix/telegram/releases)
 [![GitLab CI](https://mau.dev/mautrix/telegram/badges/main/pipeline.svg)](https://mau.dev/mautrix/telegram/container_registry)
 
-A Matrix-Telegram puppeting/relaybot bridge.
+## Custom Telegram peer filtering
+
+This fork adds per-peer-type filtering for Telegram chats before they are bridged into Matrix.
+
+The goal is to control which Telegram peers can create or update Matrix portal rooms.
+
+### Supported Telegram peer types
+
+The bridge separates Telegram peers into three logical groups:
+
+| Config section | Telegram peer type | Meaning |
+|---|---|---|
+| `users` | `user` | Direct/private Telegram chats |
+| `groups` | `chat` | Legacy Telegram groups |
+| `channels` | `channel` | Telegram channels and supergroups |
+
+Important: Telegram supergroups are usually represented by Telegram API as `channel`, so most modern Telegram groups should be filtered under the `channels` section.
+
+### New config block
+
+A new top-level `filter` section was added to the bridge config:
+
+```yaml
+filter:
+  users:
+    enabled: false
+    mode: blacklist
+    list: []
+
+  groups:
+    enabled: false
+    mode: blacklist
+    list: []
+
+  channels:
+    enabled: true
+    mode: whitelist
+    list:
+      - "-1001234567890"
+      - "-1009876543210"
+      - "regex:-100555[0-9]+"
+```
 
 ## Sponsors
 * [Joel Lehtonen / Zouppen](https://github.com/zouppen)

@@ -190,6 +190,9 @@ func (tc *TelegramClient) onUpdateNewMessage(ctx context.Context, entities tg.En
 	log := *zerolog.Ctx(ctx)
 	switch msg := update.GetMessage().(type) {
 	case *tg.Message:
+		if !tc.allowPeer(ctx, msg.PeerID) {
+			return nil
+		}
 		var isBroadcastChannel bool
 		switch peer := msg.PeerID.(type) {
 		case *tg.PeerChannel:
@@ -284,6 +287,9 @@ func rawGetTopicID(rawReplyTo tg.MessageReplyHeaderClass) int {
 }
 
 func (tc *TelegramClient) handleServiceMessage(ctx context.Context, msg *tg.MessageService) error {
+	if !tc.allowPeer(ctx, msg.PeerID) {
+		return nil
+	}
 	log := zerolog.Ctx(ctx)
 	sender := tc.getEventSender(msg, false)
 

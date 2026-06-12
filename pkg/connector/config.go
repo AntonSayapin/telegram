@@ -62,6 +62,18 @@ type ProxyConfig struct {
 	Password string `yaml:"password"`
 }
 
+type PeerFilterConfig struct {
+	Enabled *bool    `yaml:"enabled"`
+	Mode    string   `yaml:"mode"`
+	List    []string `yaml:"list"`
+}
+
+type FilterConfig struct {
+	Users    PeerFilterConfig `yaml:"users"`
+	Groups   PeerFilterConfig `yaml:"groups"`
+	Channels PeerFilterConfig `yaml:"channels"`
+}
+
 type TelegramConfig struct {
 	APIID   int    `yaml:"api_id"`
 	APIHash string `yaml:"api_hash"`
@@ -76,6 +88,8 @@ type TelegramConfig struct {
 	} `yaml:"ping"`
 
 	ProxyConfig ProxyConfig `yaml:"proxy"`
+
+	Filter FilterConfig `yaml:"filter"`
 
 	Sync struct {
 		UpdateLimit int  `yaml:"update_limit"`
@@ -141,11 +155,41 @@ func (c *TelegramConfig) UnmarshalYAML(node *yaml.Node) error {
 	return c.PostProcess()
 }
 
+func boolPtr(v bool) *bool {
+	return &v
+}
+
 func (c *TelegramConfig) PostProcess() error {
+	if c.Filter.Users.Enabled == nil {
+		c.Filter.Users.Enabled = boolPtr(true)
+	}
+	if c.Filter.Groups.Enabled == nil {
+		c.Filter.Groups.Enabled = boolPtr(true)
+	}
+	if c.Filter.Channels.Enabled == nil {
+		c.Filter.Channels.Enabled = boolPtr(true)
+	}
+
+	if c.Filter.Users.Mode == "" {
+		c.Filter.Users.Mode = "blacklist"
+	}
+	if c.Filter.Groups.Mode == "" {
+		c.Filter.Groups.Mode = "blacklist"
+	}
+	if c.Filter.Channels.Mode == "" {
+		c.Filter.Channels.Mode = "blacklist"
+	}
+
 	var err error
 	c.displaynameTemplate, err = template.New("displayname").Parse(c.DisplaynameTemplate)
 	return err
 }
+
+/*func (c *TelegramConfig) PostProcess() error {
+	var err error
+	c.displaynameTemplate, err = template.New("displayname").Parse(c.DisplaynameTemplate)
+	return err
+}*/
 
 //go:embed example-config.yaml
 var ExampleConfig string
@@ -178,6 +222,19 @@ func upgradeConfig(helper up.Helper) {
 	helper.Copy(up.Int, "sync", "create_limit")
 	helper.Copy(up.Int, "sync", "login_sync_limit")
 	helper.Copy(up.Bool, "sync", "direct_chats")
+
+	helper.Copy(up.Bool, "filter", "users", "enabled")
+	helper.Copy(up.Str, "filter", "users", "mode")
+	helper.Copy(up.Str|up.List, "filter", "users", "list")
+
+	helper.Copy(up.Bool, "filter", "groups", "enabled")
+	helper.Copy(up.Str, "filter", "groups", "mode")
+	helper.Copy(up.Str|up.List, "filter", "groups", "list")
+
+	helper.Copy(up.Bool, "filter", "channels", "enabled")
+	helper.Copy(up.Str, "filter", "channels", "mode")
+	helper.Copy(up.Str|up.List, "filter", "channels", "list")
+
 	helper.Copy(up.Bool, "takeout", "dialog_sync")
 	helper.Copy(up.Bool, "takeout", "forward_backfill")
 	helper.Copy(up.Bool, "takeout", "backward_backfill")
@@ -202,6 +259,7 @@ func (tc *TelegramConnector) GetConfig() (example string, data any, upgrader up.
 			{"ping"},
 			{"proxy"},
 			{"sync"},
+			{"filter"},
 			{"takeout"},
 			{"max_member_count"},
 		},
