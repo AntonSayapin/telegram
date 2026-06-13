@@ -5,6 +5,12 @@ Fork-specific changes:
 * Added custom Telegram peer filtering with per-type `enabled`, `mode`,
   `manual_only` and `load_media` settings.
 * Added persistent manual allow/deny overrides for manual bridging.
+  * Manual-only portal creation now uses explicit `manualbridge` and
+    `manualunbridge` commands instead of overriding upstream `bridge` and
+    `unbridge`.
+  * `manualbridge --overwrite` is accepted by the parser, but existing portal
+    room overwrite is refused until bridgev2 exposes a safe non-destructive
+    replacement API.
 * Added `!tg addressbook` for listing discovered Telegram peers from portal
   records without creating Matrix rooms or loading media.
 * Added global `portal_name_prefix` and `portal_name_suffix` settings for

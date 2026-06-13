@@ -367,7 +367,7 @@ func formatAddressBookEntry(index int, entry addressBookEntry, commandPrefix str
 		out.WriteString("\n   Filter: rejected by current config")
 	}
 	out.WriteString("\n   Command: ")
-	out.WriteString(format.SafeMarkdownCode(commandPrefix + " bridge " + entry.FriendlyID))
+	out.WriteString(format.SafeMarkdownCode(commandPrefix + " manualbridge " + entry.FriendlyID))
 	return out.String()
 }
 

@@ -8,7 +8,7 @@
 
 This fork adds per-peer-type filtering for Telegram chats before they are bridged into Matrix.
 
-The goal is to control which Telegram peers can create or update Matrix portal rooms. Peer types can also be marked `manual_only` to let dialog sync discover them without creating Matrix rooms until a user runs the `bridge` command.
+The goal is to control which Telegram peers can create or update Matrix portal rooms. Peer types can also be marked `manual_only` to let dialog sync discover them without creating Matrix rooms until a user runs the explicit `manualbridge` command.
 
 ### Supported Telegram peer types
 
@@ -50,7 +50,7 @@ filter:
     list: []
 ```
 
-`enabled: false` disables both automatic and manual bridging for that peer type. With `manual_only: true`, peers still need to pass the blacklist/whitelist, but Matrix rooms are only created after a successful manual `bridge`; `unbridge` records a persistent deny state so new Telegram messages do not recreate the room.
+`enabled: false` disables both automatic and manual bridging for that peer type. With `manual_only: true`, peers still need to pass the blacklist/whitelist, but Matrix rooms are only created after a successful `manualbridge`; `manualunbridge` records a persistent deny state so new Telegram messages do not recreate the room.
 
 In `mode: blacklist`, all peers of the type are allowed except entries in `list`. In `mode: whitelist`, only entries in `list` are allowed. Channel and supergroup IDs may be written in the Telegram-friendly `-100...` form.
 
@@ -59,6 +59,21 @@ In `mode: blacklist`, all peers of the type are allowed except entries in `list`
 Limitation: Telegram albums/grouped media may currently appear as separate `[media: 1]` placeholders until an album collector is implemented before message conversion.
 
 The `!tg addressbook` command lists known Telegram peers that have been discovered by dialog sync and stored as portal records. It supports type, bridged/unbridged, manual state, page, and search filters, and does not create rooms, download media, backfill, or change manual allow/deny state.
+
+Manual-only peers should be bridged with:
+
+```text
+!tg manualbridge -1001234567890
+!tg manualbridge channel:1234567890
+!tg manualbridge chat:123456789
+!tg manualbridge user:123456789
+```
+
+`manualbridge` creates or opens the dedicated Matrix portal room for the Telegram peer. It does not bind the current management room and does not replace the upstream `bridge` command. If the portal already has a Matrix room, the command reports the existing room instead of creating a duplicate and saves the manual allow state only after the static filter config accepts the peer.
+
+`manualbridge --overwrite ...` is parsed and validated, but overwriting an existing portal room is currently refused with a clear error. The bridgev2 portal API creates rooms with a deterministic room ID for each portal key and does not currently expose a safe non-destructive API to detach an existing Matrix room and create a fresh replacement without risking room reuse or deletion.
+
+Use `!tg manualunbridge` in the portal room to run the normal unbridge flow and then persist a manual deny state after the portal binding has been removed. The upstream `bridge` and `unbridge` commands keep their original behavior.
 
 `portal_name_prefix` / `portal_name_suffix` add a global prefix/suffix to Matrix portal room names only. They do not affect ghost/user display names or Telegram peer IDs.
 

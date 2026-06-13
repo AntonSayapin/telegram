@@ -19,7 +19,6 @@ package connector
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -32,46 +31,40 @@ import (
 	"go.mau.fi/mautrix-telegram/pkg/connector/ids"
 )
 
-var cmdBridgeWithFilter = &commands.FullHandler{
-	Func:                    fnBridgeWithFilter,
-	Name:                    commands.CommandBridge.Name,
-	Help:                    commands.CommandBridge.Help,
-	RequiresEventLevel:      commands.CommandBridge.RequiresEventLevel,
-	RequiresAdmin:           commands.CommandBridge.RequiresAdmin,
-	RequiresPortal:          commands.CommandBridge.RequiresPortal,
-	RequiresLogin:           commands.CommandBridge.RequiresLogin,
-	RequiresLoginPermission: commands.CommandBridge.RequiresLoginPermission,
-	NetworkAPI:              commands.CommandBridge.NetworkAPI,
-	NetworkConnector:        commands.CommandBridge.NetworkConnector,
+const manualBridgeUsage = "Usage: `$cmdprefix manualbridge [login ID] [--overwrite] <telegram peer ID>`"
+
+type manualBridgeArgs struct {
+	LoginID   networkid.UserLoginID
+	PeerType  ids.PeerType
+	PeerID    int64
+	PortalID  networkid.PortalID
+	Overwrite bool
 }
 
-var cmdUnbridgeWithFilter = &commands.FullHandler{
-	Func:                    fnUnbridgeWithFilter,
-	Name:                    commands.CommandUnbridge.Name,
-	Help:                    commands.CommandUnbridge.Help,
-	RequiresEventLevel:      commands.CommandUnbridge.RequiresEventLevel,
-	RequiresAdmin:           commands.CommandUnbridge.RequiresAdmin,
-	RequiresPortal:          commands.CommandUnbridge.RequiresPortal,
-	RequiresLogin:           commands.CommandUnbridge.RequiresLogin,
-	RequiresLoginPermission: commands.CommandUnbridge.RequiresLoginPermission,
-	NetworkAPI:              commands.CommandUnbridge.NetworkAPI,
-	NetworkConnector:        commands.CommandUnbridge.NetworkConnector,
+var cmdManualBridge = &commands.FullHandler{
+	Func: fnManualBridge,
+	Name: "manualbridge",
+	Help: commands.HelpMeta{
+		Section:     commands.HelpSectionChats,
+		Description: "Create or open a Telegram portal room for manual-only peer filtering",
+		Args:        "[login ID] [--overwrite] <telegram peer ID>",
+	},
 }
 
-func fnBridgeWithFilter(ce *commands.Event) {
-	originalArgs := slices.Clone(ce.Args)
-	nonFlagArgs := bridgeCommandNonFlagArgs(originalArgs)
-	if ce.Portal != nil {
-		commands.CommandBridge.Run(ce)
-		return
-	} else if len(nonFlagArgs) == 0 || len(nonFlagArgs) > 2 {
-		ce.Reply("Usage: `$cmdprefix bridge [login ID] <chat ID>`")
-		return
-	}
+var cmdManualUnbridge = &commands.FullHandler{
+	Func: fnManualUnbridge,
+	Name: "manualunbridge",
+	Help: commands.HelpMeta{
+		Section:     commands.HelpSectionChats,
+		Description: "Unbridge the current portal room and deny automatic recreation for manual-only peer filtering",
+	},
+	RequiresPortal: true,
+}
 
-	peerType, peerID, portalID, _, err := parseManualBridgeIdentifier(nonFlagArgs[len(nonFlagArgs)-1])
+func fnManualBridge(ce *commands.Event) {
+	parsed, nonFlagArgs, err := parseManualBridgeArgs(ce.Args)
 	if err != nil {
-		ce.Reply("Invalid Telegram chat ID: %v", err)
+		ce.Reply("%s", err)
 		return
 	}
 
@@ -79,48 +72,71 @@ func fnBridgeWithFilter(ce *commands.Event) {
 	if clientForConfig == nil {
 		ce.Reply("Could not find a Telegram login for checking manual bridge permissions.")
 		return
-	} else if !clientForConfig.allowPeerForManualBridge(ce.Ctx, peerType, peerID) {
-		ce.Reply("%s", clientForConfig.describeManualBridgeRejection(ce.Ctx, peerType, peerID))
+	} else if !clientForConfig.allowPeerForManualBridge(ce.Ctx, parsed.PeerType, parsed.PeerID) {
+		ce.Reply("%s", clientForConfig.describeManualBridgeRejection(ce.Ctx, parsed.PeerType, parsed.PeerID))
 		return
 	}
 
-	ce.Args = replaceBridgeIdentifierArg(originalArgs, string(portalID))
-	commands.CommandBridge.Run(ce)
-
-	portal, err := ce.Bridge.GetPortalByMXID(ce.Ctx, ce.RoomID)
+	portalKey := clientForConfig.makePortalKeyFromID(parsed.PeerType, parsed.PeerID, 0)
+	portal, err := ce.Bridge.GetPortalByKey(ce.Ctx, portalKey)
 	if err != nil {
-		ce.Log.Err(err).Msg("Failed to verify manual bridge result")
-		return
-	} else if portal == nil || portal.ID != portalID {
+		ce.Log.Err(err).Stringer("portal_key", portalKey).Msg("Failed to get portal for manual bridge")
+		ce.Reply("Failed to get portal record: %v", err)
 		return
 	}
 
-	client, login := telegramClientForManualOverride(ce, portal, nonFlagArgs)
-	log := ce.Log.With().
-		Str("peer_type", string(peerType)).
-		Int64("peer_id", peerID).
-		Str("portal_id", string(portalID)).
-		Str("room_id", string(ce.RoomID)).
-		Logger()
-	if login != nil {
-		log.UpdateContext(func(c zerolog.Context) zerolog.Context {
-			return c.Str("login_id", string(login.ID))
-		})
-	}
-	if client == nil {
-		log.Warn().Msg("Manual bridge succeeded, but no Telegram login was found for saving allow override")
-		ce.Reply("Room was bridged, but failed to save manual allow state because no Telegram login was found.")
+	if portal.MXID != "" {
+		if parsed.Overwrite {
+			ce.Reply("Manual bridge overwrite is not safely supported yet. The bridgev2 portal API creates rooms with a deterministic room ID for each portal key, and there is no non-destructive API to detach the existing Matrix room and create a fresh replacement without risking room reuse or deletion.")
+			return
+		}
+		if err = clientForConfig.setManualPeerAllowed(ce.Ctx, parsed.PeerType, parsed.PeerID); err != nil {
+			ce.Log.Err(err).Stringer("portal_key", portalKey).Msg("Failed to save manual allow state for existing portal")
+			ce.Reply("Portal already exists at [%s](%s), but failed to save manual allow state: %v", portal.MXID, portal.MXID.URI().MatrixToURL(), err)
+			return
+		}
+		ce.Reply("Portal already exists at [%s](%s). Manual allow state is saved.", portal.MXID, portal.MXID.URI().MatrixToURL())
 		return
 	}
-	if err = client.setManualPeerAllowed(ce.Ctx, peerType, peerID); err != nil {
+
+	info, err := clientForConfig.GetChatInfo(ce.Ctx, portal)
+	if err != nil {
+		ce.Log.Err(err).Stringer("portal_key", portalKey).Msg("Failed to get chat info for manual bridge")
+		ce.Reply("Failed to get chat info: %v", err)
+		return
+	} else if info == nil {
+		ce.Reply("Chat info not found")
+		return
+	}
+	if err = portal.CreateMatrixRoom(ce.Ctx, clientForConfig.userLogin, info); err != nil {
+		ce.Log.Err(err).Stringer("portal_key", portalKey).Msg("Failed to create portal room for manual bridge")
+		ce.Reply("Failed to create portal room: %v", err)
+		return
+	} else if portal.MXID == "" {
+		ce.Log.Error().Stringer("portal_key", portalKey).Msg("Manual bridge portal creation returned without Matrix room ID")
+		ce.Reply("Failed to create portal room: no Matrix room ID was saved.")
+		return
+	}
+
+	log := ce.Log.With().
+		Str("peer_type", string(parsed.PeerType)).
+		Int64("peer_id", parsed.PeerID).
+		Str("portal_id", string(parsed.PortalID)).
+		Str("room_id", string(portal.MXID)).
+		Logger()
+	log.UpdateContext(func(c zerolog.Context) zerolog.Context {
+		return c.Str("login_id", string(clientForConfig.userLogin.ID))
+	})
+	if err = clientForConfig.setManualPeerAllowed(ce.Ctx, parsed.PeerType, parsed.PeerID); err != nil {
 		log.Err(err).Msg("Manual bridge succeeded, but saving allow override failed")
-		ce.Reply("Room was bridged, but failed to save manual allow state: %v", err)
+		ce.Reply("Portal room was created at [%s](%s), but failed to save manual allow state: %v", portal.MXID, portal.MXID.URI().MatrixToURL(), err)
 		return
 	}
 	log.Info().Msg("Manual bridge succeeded, saved allow override")
+	ce.Reply("Successfully created portal room [%s](%s) and saved manual allow state.", portal.MXID, portal.MXID.URI().MatrixToURL())
 }
 
-func fnUnbridgeWithFilter(ce *commands.Event) {
+func fnManualUnbridge(ce *commands.Event) {
 	portalID := ce.Portal.ID
 	roomID := ce.Portal.MXID
 	peerType, peerID, _, err := ids.ParsePortalID(portalID)
@@ -133,11 +149,11 @@ func fnUnbridgeWithFilter(ce *commands.Event) {
 	client, login := telegramClientForManualOverride(ce, ce.Portal, nil)
 	commands.CommandUnbridge.Run(ce)
 
-	portal, verifyErr := ce.Bridge.GetPortalByMXID(ce.Ctx, roomID)
+	portal, verifyErr := ce.Bridge.GetExistingPortalByKey(ce.Ctx, ce.Portal.PortalKey)
 	if verifyErr != nil {
 		ce.Log.Err(verifyErr).Msg("Failed to verify manual unbridge result")
 		return
-	} else if portal != nil && portal.ID == portalID {
+	} else if portal != nil && portal.MXID != "" {
 		return
 	}
 
@@ -165,36 +181,32 @@ func fnUnbridgeWithFilter(ce *commands.Event) {
 	log.Info().Msg("Manual unbridge succeeded, saved deny override")
 }
 
-func bridgeCommandNonFlagArgs(args []string) []string {
+func parseManualBridgeArgs(args []string) (manualBridgeArgs, []string, error) {
+	var parsed manualBridgeArgs
 	nonFlagArgs := make([]string, 0, len(args))
 	for _, arg := range args {
-		if isStandardBridgeFlag(arg) {
+		if strings.EqualFold(arg, "--overwrite") {
+			parsed.Overwrite = true
 			continue
+		} else if strings.HasPrefix(arg, "--") {
+			return parsed, nil, fmt.Errorf("Unknown manualbridge flag %s. %s", format.SafeMarkdownCode(arg), manualBridgeUsage)
 		}
 		nonFlagArgs = append(nonFlagArgs, arg)
 	}
-	return nonFlagArgs
-}
-
-func replaceBridgeIdentifierArg(args []string, normalized string) []string {
-	out := slices.Clone(args)
-	for i := len(out) - 1; i >= 0; i-- {
-		if isStandardBridgeFlag(out[i]) {
-			continue
-		}
-		out[i] = normalized
-		break
+	if len(nonFlagArgs) == 0 || len(nonFlagArgs) > 2 {
+		return parsed, nil, fmt.Errorf(manualBridgeUsage)
 	}
-	return out
-}
-
-func isStandardBridgeFlag(arg string) bool {
-	switch strings.ToLower(arg) {
-	case "--overwrite", "--ignore-permissions":
-		return true
-	default:
-		return false
+	if len(nonFlagArgs) == 2 {
+		parsed.LoginID = networkid.UserLoginID(nonFlagArgs[0])
 	}
+	peerType, peerID, portalID, _, err := parseManualBridgeIdentifier(nonFlagArgs[len(nonFlagArgs)-1])
+	if err != nil {
+		return parsed, nil, fmt.Errorf("Invalid Telegram peer ID: %v", err)
+	}
+	parsed.PeerType = peerType
+	parsed.PeerID = peerID
+	parsed.PortalID = portalID
+	return parsed, nonFlagArgs, nil
 }
 
 func telegramClientForManualCommand(ce *commands.Event, nonFlagArgs []string) *TelegramClient {

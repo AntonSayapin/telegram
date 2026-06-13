@@ -98,7 +98,7 @@ func TestAddressBookStatusFormatting(t *testing.T) {
 	}
 	rendered := formatAddressBookEntry(1, entry, "!tg")
 	require.Contains(t, rendered, "Manual state: none")
-	require.Contains(t, rendered, "Command: `!tg bridge -1001234567890`")
+	require.Contains(t, rendered, "Command: `!tg manualbridge -1001234567890`")
 
 	entry.ManualState = store.PeerFilterOverrideAllow
 	require.Contains(t, formatAddressBookEntry(1, entry, "!tg"), "Manual state: allow")

@@ -46,8 +46,8 @@ func (tc *TelegramConnector) Init(bridge *bridgev2.Bridge) {
 		cmdEmojiPack,
 		cmdUpgrade,
 		cmdJoin,
-		cmdBridgeWithFilter,
-		cmdUnbridgeWithFilter,
+		cmdManualBridge,
+		cmdManualUnbridge,
 		cmdAddressBook,
 	)
 }

@@ -51,8 +51,10 @@
   * [x] Custom peer filtering by Telegram peer type
     * [x] Blacklist/whitelist modes for users, legacy groups, channels and supergroups
     * [x] `manual_only` peer types with persistent manual allow/deny overrides
+    * [x] Explicit `manualbridge` / `manualunbridge` commands without overriding upstream `bridge` / `unbridge`
     * [x] `!tg addressbook` for listing discovered portal records without creating rooms
     * [x] Per-peer-type `load_media` option to replace Telegram media with text placeholders
+    * [ ] Safe non-destructive overwrite support for existing `manualbridge` portal rooms
     * [ ] Album/grouped media aggregation for `load_media: false` placeholders
   * [x] Global Matrix portal room name prefix/suffix
   * [x] Production GHCR Docker release workflow and Helm chart for StatefulSet deployment
