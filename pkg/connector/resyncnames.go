@@ -17,6 +17,7 @@
 package connector
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -24,12 +25,16 @@ import (
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/commands"
 	"maunium.net/go/mautrix/bridgev2/networkid"
+	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/format"
+	"maunium.net/go/mautrix/id"
 
 	"go.mau.fi/mautrix-telegram/pkg/connector/ids"
 )
 
 const resyncNamesExampleLimit = 10
+
+var errNoResyncNamesLogin = errors.New("no Telegram login found to resolve current chat info")
 
 type resyncNamesFilter struct {
 	DryRun   bool
@@ -44,6 +49,7 @@ type resyncNamesChangeExample struct {
 
 type resyncNamesIssueExample struct {
 	PortalKey networkid.PortalKey
+	RoomID    id.RoomID
 	Reason    string
 }
 
@@ -57,6 +63,12 @@ type resyncNamesResult struct {
 
 	ChangeExamples []resyncNamesChangeExample
 	IssueExamples  []resyncNamesIssueExample
+}
+
+type resyncNamesHooks struct {
+	checkRoomAccessible func(ce *commands.Event, portal *bridgev2.Portal) error
+	resolveName         func(ce *commands.Event, portal *bridgev2.Portal) (string, bool, error)
+	updateName          func(ce *commands.Event, portal *bridgev2.Portal, newName string) error
 }
 
 var cmdResyncNames = &commands.FullHandler{
@@ -131,32 +143,42 @@ func runResyncNames(ce *commands.Event, filter resyncNamesFilter) (resyncNamesRe
 		}
 
 		result.Scanned++
-		resyncPortalName(ce, portal, filter, &result)
+		resyncPortalNameWithHooks(ce, portal, filter, &result, defaultResyncNamesHooks())
 	}
 	return result, nil
 }
 
-func resyncPortalName(ce *commands.Event, portal *bridgev2.Portal, filter resyncNamesFilter, result *resyncNamesResult) {
+func defaultResyncNamesHooks() resyncNamesHooks {
+	return resyncNamesHooks{
+		checkRoomAccessible: checkResyncNamesRoomAccessible,
+		resolveName:         resolveResyncNamesPortalName,
+		updateName:          updateResyncNamesPortalName,
+	}
+}
+
+func resyncPortalNameWithHooks(ce *commands.Event, portal *bridgev2.Portal, filter resyncNamesFilter, result *resyncNamesResult, hooks resyncNamesHooks) {
 	if portal.MXID == "" {
-		result.addSkipped(portal.PortalKey, "portal has no Matrix room ID")
+		result.addSkippedPortal(portal, "portal has no Matrix room ID")
 		return
 	}
 
-	client, _ := telegramClientForManualOverride(ce, portal, nil)
-	if client == nil {
-		result.addSkipped(portal.PortalKey, "no Telegram login found to resolve current chat info")
+	if err := hooks.checkRoomAccessible(ce, portal); err != nil {
+		result.addSkippedPortal(portal, formatResyncNamesMatrixAccessReason(err))
 		return
 	}
 
-	info, err := client.GetChatInfo(ce.Ctx, portal)
-	if err != nil {
-		ce.Log.Err(err).Stringer("portal_key", portal.PortalKey).Msg("Failed to get chat info for name resync")
-		result.addFailed(portal.PortalKey, fmt.Sprintf("failed to get current Telegram chat info: %v", err))
+	newName, ok, err := hooks.resolveName(ce, portal)
+	if errors.Is(err, errNoResyncNamesLogin) {
+		result.addSkippedPortal(portal, err.Error())
 		return
-	}
-	newName, ok := client.resyncNameFromChatInfo(info)
-	if !ok {
-		result.addSkipped(portal.PortalKey, "current Telegram chat info has no room name")
+	} else if err != nil {
+		if ce != nil {
+			ce.Log.Err(err).Stringer("portal_key", portal.PortalKey).Msg("Failed to get chat info for name resync")
+		}
+		result.addFailedPortal(portal, fmt.Sprintf("failed to get current Telegram chat info: %v", err))
+		return
+	} else if !ok {
+		result.addSkippedPortal(portal, "current Telegram chat info has no room name")
 		return
 	}
 
@@ -173,15 +195,64 @@ func resyncPortalName(ce *commands.Event, portal *bridgev2.Portal, filter resync
 		return
 	}
 
-	portal.UpdateInfo(ce.Ctx, &bridgev2.ChatInfo{
-		Name:                       &newName,
-		ExcludeChangesFromTimeline: true,
-	}, nil, nil, time.Time{})
-	if portal.Name != newName || !portal.NameSet {
-		result.addFailed(portal.PortalKey, "Matrix room name update was not confirmed by bridgev2")
+	if err := hooks.updateName(ce, portal, newName); err != nil {
+		result.addFailedPortal(portal, fmt.Sprintf("failed to update Matrix room name: %v", err))
 		return
 	}
 	result.Updated++
+}
+
+func checkResyncNamesRoomAccessible(ce *commands.Event, portal *bridgev2.Portal) error {
+	if ce == nil || ce.Bot == nil {
+		return fmt.Errorf("Matrix room accessibility check is unavailable")
+	}
+	return ce.Bot.EnsureJoined(ce.Ctx, portal.MXID)
+}
+
+func resolveResyncNamesPortalName(ce *commands.Event, portal *bridgev2.Portal) (string, bool, error) {
+	client, _ := telegramClientForManualOverride(ce, portal, nil)
+	if client == nil {
+		return "", false, errNoResyncNamesLogin
+	}
+
+	info, err := client.GetChatInfo(ce.Ctx, portal)
+	if err != nil {
+		return "", false, err
+	}
+	name, ok := client.resyncNameFromChatInfo(info)
+	return name, ok, nil
+}
+
+func updateResyncNamesPortalName(ce *commands.Event, portal *bridgev2.Portal, newName string) error {
+	if ce == nil || ce.Bot == nil {
+		return fmt.Errorf("Matrix room update API is unavailable")
+	}
+
+	_, err := ce.Bot.SendState(ce.Ctx, portal.MXID, event.StateRoomName, "", &event.Content{
+		Parsed: &event.RoomNameEventContent{Name: newName},
+		Raw: map[string]any{
+			"com.beeper.exclude_from_timeline": true,
+		},
+	}, time.Time{})
+	if err != nil {
+		return err
+	}
+
+	portal.Name = newName
+	portal.NameSet = true
+	portal.NameIsCustom = true
+	if err = portal.Save(ce.Ctx); err != nil {
+		return fmt.Errorf("sent room name event, but failed to save portal metadata: %w", err)
+	}
+	return nil
+}
+
+func formatResyncNamesMatrixAccessReason(err error) string {
+	msg := strings.TrimSpace(err.Error())
+	if msg == "" {
+		return "Matrix room inaccessible or bot not joined"
+	}
+	return "Matrix room inaccessible or bot not joined: " + msg
 }
 
 func (tc *TelegramClient) resyncNameFromChatInfo(info *bridgev2.ChatInfo) (string, bool) {
@@ -205,18 +276,29 @@ func (result *resyncNamesResult) addChangeExample(portalKey networkid.PortalKey,
 
 func (result *resyncNamesResult) addSkipped(portalKey networkid.PortalKey, reason string) {
 	result.Skipped++
-	result.addIssueExample(portalKey, reason)
+	result.addIssueExample(portalKey, "", reason)
 }
 
 func (result *resyncNamesResult) addFailed(portalKey networkid.PortalKey, reason string) {
 	result.Failed++
-	result.addIssueExample(portalKey, reason)
+	result.addIssueExample(portalKey, "", reason)
 }
 
-func (result *resyncNamesResult) addIssueExample(portalKey networkid.PortalKey, reason string) {
+func (result *resyncNamesResult) addSkippedPortal(portal *bridgev2.Portal, reason string) {
+	result.Skipped++
+	result.addIssueExample(portal.PortalKey, portal.MXID, reason)
+}
+
+func (result *resyncNamesResult) addFailedPortal(portal *bridgev2.Portal, reason string) {
+	result.Failed++
+	result.addIssueExample(portal.PortalKey, portal.MXID, reason)
+}
+
+func (result *resyncNamesResult) addIssueExample(portalKey networkid.PortalKey, roomID id.RoomID, reason string) {
 	if len(result.IssueExamples) < resyncNamesExampleLimit {
 		result.IssueExamples = append(result.IssueExamples, resyncNamesIssueExample{
 			PortalKey: portalKey,
+			RoomID:    roomID,
 			Reason:    reason,
 		})
 	}
@@ -257,10 +339,14 @@ func formatResyncNamesReply(result resyncNamesResult) string {
 	if len(result.IssueExamples) > 0 {
 		builder.WriteString("\n\nSkipped/failed examples:\n")
 		for _, example := range result.IssueExamples {
+			identifier := example.PortalKey.String()
+			if example.RoomID != "" {
+				identifier += " / " + string(example.RoomID)
+			}
 			fmt.Fprintf(
 				&builder,
 				"* %s: %s\n",
-				format.SafeMarkdownCode(example.PortalKey.String()),
+				format.SafeMarkdownCode(identifier),
 				example.Reason,
 			)
 		}
