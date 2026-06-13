@@ -81,74 +81,11 @@ Use `!tg resync-names --dry-run` to preview Matrix room name changes for already
 
 TODO: manual allow/deny overrides are currently stored per Telegram peer, not per forum topic.
 
-## Production deployment
+## Deploy
 
-This fork includes a Docker release workflow and a Helm chart for the production Kubernetes deployment.
-
-Release image flow:
-
-```bash
-export RELEASE_TAG=v26.05.3-antonsayapin
-
-git tag "$RELEASE_TAG"
-git push origin custom-peer-filter
-git push origin "$RELEASE_TAG"
-```
-
-The release tag build pushes:
-
-```text
-ghcr.io/antonsayapin/mautrix-telegram:v26.05.3-antonsayapin
-ghcr.io/antonsayapin/mautrix-telegram:latest
-```
-
-The Docker workflow runs on tags matching `v*.*.*-antonsayapin` and uses the git tag name as the Docker image tag.
-
-The Helm chart is in `deploy/helm/mautrix-telegram`. It deploys `StatefulSet/mautrix-telegram` and `Service/mautrix-telegram` in the target namespace, mounts the existing `mautrix-telegram-data` PVC at `/data`, and expects `/data/config.yaml` and `/data/registration.yaml` to already exist.
-
-The chart intentionally does not create a PVC. `persistence.existingClaim` is required and template rendering fails if it is empty, to avoid accidentally starting the bridge without the existing `/data` volume. The chart also enforces `replicaCount: 1` because the production PVC is RWO and the bridge must be single-instance.
-
-Liveness and readiness probes are disabled by default because this deployment does not currently expose a confirmed health endpoint. Resources and security context are left minimal by default.
-
-First migration warning:
-
-- The current manual `StatefulSet` and `Service` are not Helm-managed.
-- The first migration requires deleting the old `StatefulSet` and `Service` while keeping the PVC.
-- Never delete `mautrix-telegram-data`.
-
-Example first migration:
-
-```bash
-kubectl scale statefulset/mautrix-telegram -n ess --replicas=0
-kubectl delete statefulset mautrix-telegram -n ess
-kubectl delete service mautrix-telegram -n ess
-kubectl get pvc -n ess | grep mautrix-telegram
-```
-
-Server upgrade flow:
-
-```bash
-cd ~/mautrix-telegram-install/telegram
-
-export RELEASE_TAG=v26.05.3-antonsayapin
-
-git fetch --tags origin
-git checkout "$RELEASE_TAG"
-
-helm package deploy/helm/mautrix-telegram --destination ~/mautrix-telegram-install
-
-sed -i "s/^  tag: .*/  tag: ${RELEASE_TAG}/" \
-  ~/ess-config-values/mautrix-telegram/mautrix-telegram-values.yaml
-
-helm upgrade --install mautrix-telegram \
-  ~/mautrix-telegram-install/mautrix-telegram-0.1.0.tgz \
-  --namespace ess \
-  -f ~/ess-config-values/mautrix-telegram/mautrix-telegram-values.yaml
-```
-
-The chart package filename follows `deploy/helm/mautrix-telegram/Chart.yaml` (`mautrix-telegram-0.1.0.tgz` in the example above). The container image tag is controlled separately by `image.tag` in values.
-
-Do not commit generated `.tgz` Helm packages.
+This fork includes an optional Helm chart under deploy/helm/mautrix-telegram.
+The chart expects an existing PVC with bridge config and registration files.
+Do not commit real config.yaml, registration.yaml, tokens, generated chart packages, or environment-specific values.
 
 ## Sponsors
 * [Joel Lehtonen / Zouppen](https://github.com/zouppen)

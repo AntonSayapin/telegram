@@ -6,7 +6,7 @@ image:
   pullPolicy: IfNotPresent
 
 imagePullSecrets:
-  - name: ghcr-pull-secret
+  - name: <image-pull-secret>
 
 service:
   type: ClusterIP
@@ -16,7 +16,7 @@ service:
   publishNotReadyAddresses: true
 
 persistence:
-  existingClaim: mautrix-telegram-data
+  existingClaim: <existing-pvc>
   mountPath: /data
 
 command:
