@@ -15,6 +15,8 @@ Fork-specific changes:
   records without creating Matrix rooms or loading media.
 * Added global `portal_name_prefix` and `portal_name_suffix` settings for
   Matrix portal room names.
+  * Added `!tg resync-names` with `--dry-run` to migrate existing bridged
+    portal room names after changing the prefix/suffix config.
 * Added Docker release publishing to GHCR and a Helm chart for the
   `StatefulSet/mautrix-telegram` production deployment with existing PVC
   safety checks.

@@ -57,6 +57,7 @@
     * [ ] Safe non-destructive overwrite support for existing `manualbridge` portal rooms
     * [ ] Album/grouped media aggregation for `load_media: false` placeholders
   * [x] Global Matrix portal room name prefix/suffix
+    * [x] Explicit `!tg resync-names` command for updating existing bridged portal room names
   * [x] Production GHCR Docker release workflow and Helm chart for StatefulSet deployment
   * [x] Private chat creation by inviting Matrix ghost of Telegram user to new room
   * [x] Option to use bot to relay messages for unauthenticated Matrix users (relaybot)

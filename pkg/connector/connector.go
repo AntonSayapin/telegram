@@ -49,6 +49,7 @@ func (tc *TelegramConnector) Init(bridge *bridgev2.Bridge) {
 		cmdManualBridge,
 		cmdManualUnbridge,
 		cmdAddressBook,
+		cmdResyncNames,
 	)
 }
 

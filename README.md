@@ -77,6 +77,8 @@ Use `!tg manualunbridge` in the portal room to run the normal unbridge flow and 
 
 `portal_name_prefix` / `portal_name_suffix` add a global prefix/suffix to Matrix portal room names only. They do not affect ghost/user display names or Telegram peer IDs.
 
+Use `!tg resync-names --dry-run` to preview Matrix room name changes for already bridged Telegram portals after changing `portal_name_prefix` or `portal_name_suffix`. Use `!tg resync-names` to apply the room name updates. The command only updates existing portal room names; it does not create rooms, bridge new peers, download media, backfill messages, or change manual allow/deny state.
+
 TODO: manual allow/deny overrides are currently stored per Telegram peer, not per forum topic.
 
 ## Production deployment

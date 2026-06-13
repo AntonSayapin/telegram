@@ -121,9 +121,22 @@ func (tc *TelegramClient) getDMChatInfo(ctx context.Context, userID int64) (*bri
 		}
 		chatInfo.Name = ptr.Ptr("Telegram Saved Messages")
 		chatInfo.Topic = ptr.Ptr("Your Telegram cloud storage chat")
+	} else {
+		tc.setDMPortalNameFromGhost(&chatInfo, ghost)
 	}
 	tc.applyPortalNameFormat(&chatInfo)
 	return &chatInfo, nil
+}
+
+func (tc *TelegramClient) setDMPortalNameFromGhost(chatInfo *bridgev2.ChatInfo, ghost *bridgev2.Ghost) {
+	if chatInfo.Name != nil || ghost == nil || ghost.Name == "" || !tc.portalNameFormatConfigured() {
+		return
+	}
+	chatInfo.Name = ptr.Ptr(ghost.Name)
+}
+
+func (tc *TelegramClient) portalNameFormatConfigured() bool {
+	return tc.main.Config.PortalNamePrefix != "" || tc.main.Config.PortalNameSuffix != ""
 }
 
 func isBroadcastChannel(chat tg.ChatClass) bool {
