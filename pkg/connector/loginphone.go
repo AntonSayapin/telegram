@@ -132,6 +132,7 @@ func (pl *PhoneLogin) submitNumber(ctx context.Context, phone string) (*bridgev2
 	}
 	switch s := sentCode.(type) {
 	case *tg.AuthSentCode:
+		logSentCodeDetails(ctx, s)
 		pl.hash = s.PhoneCodeHash
 		return phoneLoginStep, nil
 	case *tg.AuthSentCodeSuccess:
@@ -164,4 +165,33 @@ func (pl *PhoneLogin) submitCode(ctx context.Context, code string) (*bridgev2.Lo
 		return nil, fmt.Errorf("failed to submit code: %w", err)
 	}
 	return pl.finalizeLogin(ctx, authorization, &UserLoginMetadata{LoginPhone: pl.phone})
+}
+
+func logSentCodeDetails(ctx context.Context, sentCode *tg.AuthSentCode) {
+	codeTypeName := "<nil>"
+	var codeTypeID uint32
+	if sentCode.Type != nil {
+		codeTypeName = sentCode.Type.TypeName()
+		codeTypeID = sentCode.Type.TypeID()
+	}
+	event := zerolog.Ctx(ctx).Debug().
+		Str("sent_code_type", codeTypeName).
+		Uint32("sent_code_type_id", codeTypeID).
+		Bool("has_phone_code_hash", sentCode.PhoneCodeHash != "")
+
+	if nextType, ok := sentCode.GetNextType(); ok {
+		nextTypeName := "<nil>"
+		var nextTypeID uint32
+		if nextType != nil {
+			nextTypeName = nextType.TypeName()
+			nextTypeID = nextType.TypeID()
+		}
+		event = event.
+			Str("next_code_type", nextTypeName).
+			Uint32("next_code_type_id", nextTypeID)
+	}
+	if timeout, ok := sentCode.GetTimeout(); ok {
+		event = event.Int("timeout_seconds", timeout)
+	}
+	event.Msg("Telegram login code was requested")
 }
